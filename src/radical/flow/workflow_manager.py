@@ -3,6 +3,9 @@ import queue
 import time
 import threading
 
+import radical.utils as ru
+import radical.pilot as rp
+
 from functools import wraps
 from typing import Callable, Dict
 from concurrent.futures import Future
@@ -11,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 import typeguard
 from .data import InputFile, OutputFile
 
-from engines.radical_pilot import ResourceEngine
+from radical.flow.backends.execution.radical_pilot import ResourceEngine
 
 
 

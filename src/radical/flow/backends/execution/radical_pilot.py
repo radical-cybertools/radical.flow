@@ -1,5 +1,5 @@
 import typeguard
-
+from typing import Dict
 import radical.utils as ru
 import radical.pilot as rp
 
@@ -45,7 +45,7 @@ class ResourceEngine:
     @typeguard.typechecked
     def __init__(self, resources: Dict) -> None:
         try:
-            self._session = rp.Session(uid=ru.generate_id('rose.session',
+            self._session = rp.Session(uid=ru.generate_id('flow.session',
                                                           mode=ru.ID_PRIVATE))
             self.task_manager = rp.TaskManager(self._session)
             self.pilot_manager = rp.PilotManager(self._session)
