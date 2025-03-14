@@ -1,6 +1,8 @@
 # flake8: noqa
-import queue
+import os
+import math
 import time
+import queue
 import threading
 
 import radical.utils as ru
@@ -77,16 +79,18 @@ class WorkflowEngine:
         run_thread.start()
 
         self.task_manager.register_callback(self.task_callbacks)
-        self._conccurent_wf_submitter = ThreadPoolExecutor()
+        
+        max_threads = os.getenv('FLOW_THREADS', math.inf)
+        self._wf_submitter = ThreadPoolExecutor(max_workers=max_threads)
 
     def as_async(self, func: Callable):
         """
-        A decorator to run `blocking` function in a seperate thread.
+        A decorator to run `blocking` function in a separate thread.
         """
         @wraps(func)
         def wrapper(*args, **kwargs):
             # Submit the function to the thread pool and return the Future
-            future = self._conccurent_wf_submitter.submit(func, *args, **kwargs)
+            future = self._wf_submitter.submit(func, *args, **kwargs)
             return future  # The caller can wait for the future's result if needed
 
         return wrapper
