@@ -25,9 +25,19 @@ class WorkflowEngine:
     """
     A WorkflowEngine manages and executes tasks within a Directed Acyclic Graph (DAG)
     and Cyclic Graph (CG) structure, allowing for complex workflows where tasks may have
-    dependencies. Each node in the DAG represents a distinct task, even if some nodes have
-    identical labels. This allows for flexible, reusable task definitions in workflows with
-    intricate dependencies.
+    dependencies. The WorkflowEngine has the capabilities to express asynchronous and
+    adaptive: tasks, workflows and workflows of workflows (blocks). Each node in the DAG
+    represents a distinct task, workflow or block even if some nodes have identical labels.
+    This allows for flexible, reusable workflows components with intricate dependencies. To
+    summarize, the workflow engine capable of managing:
+        1- Tasks: set of application to be executed on resources.
+        2- Workflow(s): set of tasks with dependencies that requires to be executed in a certain
+           order.
+        3- Block(s): set of workflows and tasks that can/have decencies and requires to be
+           executed in a certain order.
+
+    ** Node: All of the DAG/CG components can be executed asynchronously with the possibility
+             of decision making stages (adaptively)
 
     Workflows that utilizes the `WorkflowEngine` can have the same label or identifier, but
     they represent distinct entities within the workflow.

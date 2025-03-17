@@ -34,7 +34,7 @@ def run_blocks():
     b2.result()
 
 blocks = []
-for b in range(1000):
+for b in range(10000):
     block = run_blocks()
     blocks.append(block)
 
