@@ -1,129 +1,46 @@
 # flake8: noqa
-import queue
+import os
+import math
 import time
+import queue
 import threading
+
+import radical.utils as ru
+import radical.pilot as rp
 
 from functools import wraps
 from typing import Callable, Dict
 from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 
-import radical.utils as ru
-import radical.pilot as rp
-
 import typeguard
+from .task import Task as Block
 from .data import InputFile, OutputFile
 
+from radical.flow.backends.execution.radical_pilot import ResourceEngine
 
-class ResourceEngine:
-    """
-    The ResourceEngine class is responsible for managing computing resources and creating
-    sessions for executing tasks. It interfaces with a resource management framework to
-    initialize sessions, manage task execution, and submit resources required for the workflow.
-
-    Attributes:
-        session (rp.Session): A session instance used to manage and track task execution,
-            uniquely identified by a generated ID. This session serves as the primary context for
-            all task and resource management within the workflow.
-
-        task_manager (rp.TaskManager): Manages the lifecycle of tasks, handling their submission,
-            tracking, and completion within the session.
-
-        pilot_manager (rp.PilotManager): Manages computing resources, known as "pilots," which
-            are dynamically allocated based on the provided resources. The pilot manager
-            coordinates these resources to support task execution.
-
-        resource_pilot (rp.Pilot): Represents the submitted computing resources as a pilot.
-            This pilot is described by the `resources` parameter provided during initialization,
-            specifying details such as CPU, GPU, and memory requirements.
-
-    Parameters:
-        resources (Dict): A dictionary specifying the resource requirements for the pilot,
-            including details like the number of CPUs, GPUs, and memory. This dictionary
-            configures the pilot to match the needs of the tasks that will be executed.
-
-    Raises:
-        Exception: If session creation, pilot submission, or task manager setup fails,
-            the ResourceEngine will raise an exception, ensuring the resources are correctly
-            allocated and managed.
-
-    Example:
-        ```python
-        resources = {"cpu": 4, "gpu": 1, "memory": "8GB"}
-        engine = ResourceEngine(resources)
-        ```
-    """
-
-    @typeguard.typechecked
-    def __init__(self, resources: Dict) -> None:
-        try:
-            self._session = rp.Session(uid=ru.generate_id('rose.session',
-                                                          mode=ru.ID_PRIVATE))
-            self.task_manager = rp.TaskManager(self._session)
-            self.pilot_manager = rp.PilotManager(self._session)
-            self.resource_pilot = self.pilot_manager.submit_pilots(rp.PilotDescription(resources))
-            self.task_manager.add_pilots(self.resource_pilot)
-
-            print('Resource Engine started successfully\n')
-
-        except Exception:
-            print('Resource Engine Failed to start, terminating\n')
-            raise
-
-        except (KeyboardInterrupt, SystemExit) as e:
-            # the callback called sys.exit(), and we can here catch the
-            # corresponding KeyboardInterrupt exception for shutdown.  We also catch
-            # SystemExit (which gets raised if the main threads exits for some other
-            # reason).
-            excp_msg = f'Resource engine failed internally, please check {self._session.path}'
-            raise SystemExit(excp_msg) from e
-
-    def state(self):
-        """
-        Retrieve the current state of the resource pilot.
-
-        Returns:
-            The current state of the resource pilot.
-        """
-        raise NotImplementedError
-
-    def task_state_cb(self, task, state):
-        """
-        Callback function for handling task state changes.
-
-        Args:
-            task: The task object whose state has changed.
-            state: The new state of the task.
-        
-        Note:
-            This method is intended to be overridden or extended
-            to perform specific actions when a task's state changes.
-        """
-        raise NotImplementedError
-
-    def shutdown(self) -> None:
-        """
-        Gracefully shuts down the session, downloading any necessary data.
-
-        This method ensures that the session is properly closed and any
-        required data is downloaded before finalizing the shutdown.
-
-        Returns:
-            None
-        """
-        print('Shutdown is triggered, terminating the resources gracefully')
-        self._session.close(download=True)
 
 
 class WorkflowEngine:
     """
     A WorkflowEngine manages and executes tasks within a Directed Acyclic Graph (DAG)
-    structure, allowing for complex workflows where tasks may have dependencies. Each
-    node in the DAG represents a distinct task, even if some nodes have identical labels.
-    This allows for flexible, reusable task definitions in workflows with intricate dependencies.
+    and Cyclic Graph (CG) structure, allowing for complex workflows where tasks may have
+    dependencies. The WorkflowEngine has the capabilities to express asynchronous and
+    adaptive: tasks, workflows and workflows of workflows (blocks). Each node in the DAG
+    represents a distinct task, workflow or block even if some nodes have identical labels.
+    This allows for flexible, reusable workflows components with intricate dependencies. To
+    summarize, the workflow engine capable of managing:
+        1- Tasks: set of application to be executed on resources.
+        2- Workflow(s): set of tasks with dependencies that requires to be executed in a certain
+           order.
+        3- Block(s): set of workflows and tasks that can/have decencies and requires to be
+           executed in a certain order.
 
-    In this DAG, nodes (tasks) can have the same label or identifier, but they represent distinct
-    entities within the workflow.
+    ** Node: All of the DAG/CG components can be executed asynchronously with the possibility
+             of decision making stages (adaptively)
+
+    Workflows that utilizes the `WorkflowEngine` can have the same label or identifier, but
+    they represent distinct entities within the workflow.
 
     Example:
         Consider a simple DAG representation:
@@ -133,6 +50,8 @@ class WorkflowEngine:
 
         Here, two nodes labeled 'A' are distinct instances connected to 'B' and 'C',
         each with its own role in the workflow.
+
+        Note: It is possible for both A nodes to have cross dependencies on each other.
 
     Attributes:
         engine (ResourceEngine): An instance of `ResourceEngine`, responsible for managing the
@@ -169,18 +88,55 @@ class WorkflowEngine:
         run_thread.daemon = True
         run_thread.start()
 
-        self.task_manager.register_callback(self.callbacks)
-        self._conccurent_wf_submitter = ThreadPoolExecutor()
+        self.task_manager.register_callback(self.task_callbacks)
+        
+        max_threads = os.getenv('FLOW_THREADS', math.inf)
+        self._wf_submitter = ThreadPoolExecutor(max_workers=max_threads)
 
     def as_async(self, func: Callable):
         """
-        A decorator to run `blocking` function in a seperate thread.
+        A decorator to run `blocking` function in a separate thread.
         """
         @wraps(func)
         def wrapper(*args, **kwargs):
             # Submit the function to the thread pool and return the Future
-            future = self._conccurent_wf_submitter.submit(func, *args, **kwargs)
+            future = self._wf_submitter.submit(func, *args, **kwargs)
             return future  # The caller can wait for the future's result if needed
+
+        return wrapper
+    
+    @typeguard.typechecked
+    def block(self, func: Callable):
+        """Use RoseEngine as a decorator to register workflow tasks."""
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            block_descriptions = Block()
+            block_descriptions['name'] = func.__name__
+            block_descriptions['args'] = args
+            block_descriptions['kwargs'] = kwargs
+            block_descriptions['function'] = func
+            block_descriptions['uid'] = self._assign_uid(prefix='block')
+
+            block_deps, input_files_deps, output_files_deps = self._detect_dependencies(args)
+
+            block_descriptions['metadata'] = {'dependencies': block_deps,
+                                              'input_files': input_files_deps,
+                                              'output_files': output_files_deps}
+
+            block_fut = Future()  # Create a Future object for this block
+            block_fut.id = block_descriptions['uid'].split('block.')[1]
+            block_fut.block = block_descriptions
+
+            # Store the future and block description in the tasks dictionary, keyed by UID
+            self.tasks[block_descriptions['uid']] = {'future': block_fut,
+                                                     'description': block_descriptions}
+            self.dependencies[block_descriptions['uid']] = block_deps
+
+            msg = f"Registered block '{block_descriptions['name']}' and id of {block_fut.id}"
+            msg += f" with dependencies: {[dep['name'] for dep in block_deps]}"
+            print(msg)
+
+            return block_fut
 
         return wrapper
 
@@ -191,7 +147,7 @@ class WorkflowEngine:
         def wrapper(*args, **kwargs):
             task_descriptions = func(*args, **kwargs)
             task_descriptions['name'] = func.__name__
-            task_descriptions['uid'] = self._assign_task_uid()
+            task_descriptions['uid'] = self._assign_uid(prefix='task')
 
             task_deps, input_files_deps, output_files_deps = self._detect_dependencies(args)
 
@@ -230,7 +186,7 @@ class WorkflowEngine:
                 raise e
         return wrapper
 
-    def _assign_task_uid(self):
+    def _assign_uid(self, prefix):
         """
         Generates a unique identifier (UID) for a task.
 
@@ -240,8 +196,9 @@ class WorkflowEngine:
         Returns:
             str: The generated unique identifier for the task.
         """
-        uid = ru.generate_id('task.%(item_counter)06d',
-                             ru.ID_CUSTOM, ns=self.engine._session.uid)
+        uid = ru.generate_id(f"{prefix}.%(item_counter)06d",
+                             mode=ru.ID_CUSTOM, ns=self.engine._session.uid)
+
         return uid
 
     def link_explicit_data_deps(self, task_id, file_name=None):
@@ -323,8 +280,11 @@ class WorkflowEngine:
 
         for possible_dep in possible_dependencies:
             # it is a task deps
-            if isinstance(possible_dep, Future) and hasattr(possible_dep, 'task'):
-                possible_dep = possible_dep.task
+            if isinstance(possible_dep, Future):
+                if hasattr(possible_dep, 'task'):
+                    possible_dep = possible_dep.task
+                elif hasattr(possible_dep, 'block'):
+                    possible_dep = possible_dep.block
                 dependencies.append(possible_dep)
             # it is input file needs to be obtained from somewhere
             elif isinstance(possible_dep, InputFile):
@@ -337,7 +297,7 @@ class WorkflowEngine:
 
     def _clear(self):
         """
-        clear worfklow tasks and their deps
+        clear workflow tasks and their deps
         """
 
         self.tasks.clear()
@@ -400,12 +360,12 @@ class WorkflowEngine:
 
                     # Add the task to the submission list
                     to_submit.append(task_desc)
-                    msg = f"Task '{task_desc.name}' ready to submit;"
+                    msg = f"'{task_desc.name}' ready to submit;"
                     msg += f" resolved dependencies: {[dep['name'] for dep in dependencies]}"
                     print(msg)
 
             if to_submit:
-                # Submit collected tasks concurrently and track their futures
+                # Submit collected tasks/blocks concurrently and track their futures
                 self.queue.put(to_submit)
                 for t in to_submit:
                     self.tasks[t.uid]['future'].set_running_or_notify_cancel()
@@ -414,7 +374,7 @@ class WorkflowEngine:
 
             time.sleep(0.5)  # Small delay to prevent excessive CPU usage in the loop
 
-    def callbacks(self, task, state):
+    def task_callbacks(self, task, state):
         """
         Callback function to handle task state changes and set results or exceptions.
 
@@ -439,6 +399,47 @@ class WorkflowEngine:
             print(f'{task.uid} is FAILED')
             task_fut.set_exception(Exception(task.stderr))
 
+    @typeguard.typechecked
+    def _submit_blocks(self, blocks: list):
+        """
+        Submits a blocks for execution in a separate thread.
+
+        This method submits a block for execution in a separate thread using the `as_async` 
+        decorator. The block is executed in the background, and the result or exception is 
+        set on the block's future.
+
+        Args:
+            blocks (list of dicts): A dictionary containing the block's unique identifier and function
+                information, including the function to execute, arguments, and keyword arguments.
+
+        Returns:
+            Future: A future object representing the block's execution that was returned to the user
+                    during the block registration process.
+        """
+        for block in blocks:
+            args = block['args']
+            kwargs = block['kwargs']
+            func = block['function']
+            block_fut = self.tasks[block['uid']]['future']
+
+            # execute the block function in a separate thread
+            self.as_async(self.execute_block)(block_fut, func, *args, **kwargs)
+
+    def execute_block(self, block_fut, func, *args, **kwargs):
+        """Runs the block function and updates the block_fut once complete.
+           
+        Args:
+            block_fut (Future): The future object representing the block's execution.
+            func (Callable): The function to execute.
+            *args: The arguments to pass to the function.
+            **kwargs: The keyword arguments to pass to the function.
+        """
+        try:
+            result = func(*args, **kwargs)  # Execute the function
+            block_fut.set_result(result)    # Resolve block_fut with the result
+        except Exception as e:
+            block_fut.set_exception(e)      # Pass the exception to block_fut
+
     @shutdown_on_failure
     def submit(self):
         """
@@ -456,8 +457,19 @@ class WorkflowEngine:
         """
         while True:
             try:
-                tasks = self.queue.get(timeout=1)
-                print(f'submitting {[t.name for t in tasks]} for execution')
-                self.task_manager.submit_tasks(tasks)
+                objects = self.queue.get(timeout=1)
+
+                # isolate block objects from task objects
+                tasks = [t for t in objects if t and 'block' not in t['uid']]
+                blocks = [t for t in objects if t and 'task' not in t['uid']]
+
+                print(f'submitting {[b.name for b in objects]} for execution')
+
+                # submit each object to its respective destination
+                if tasks:
+                    self.task_manager.submit_tasks(tasks)
+                if blocks:
+                    self._submit_blocks(blocks)
+
             except queue.Empty:
                 time.sleep(0.5)
