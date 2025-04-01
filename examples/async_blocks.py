@@ -1,5 +1,6 @@
 from radical.flow import WorkflowEngine, ResourceEngine, Task
 import time
+import asyncio
 
 engine = ResourceEngine({'resource': 'local.localhost'})
 flow = WorkflowEngine(engine=engine)
@@ -17,27 +18,22 @@ def task2(*args):
 def block1(*args):
     t1 = task1()
     t2 = task2(t1)
-    t2.result()
     print(f'block1 done at {time.time()}')
 
 @flow.block
 def block2(*args):
     t3 = task1()
     t4 = task2(t3)
-    t4.result()
     print(f'block2 done at {time.time()}')
 
-@flow.as_async
-def run_blocks():
-    b1 = block1()
-    b2 = block2(b1)
-    b2.result()
 
-blocks = []
-for b in range(10000):
-    block = run_blocks()
-    blocks.append(block)
+async def run_blocks():
+    b1_fut = block1()
+    b2_fut = block2(b1_fut)
 
-[b.result() for b in blocks]
+async def main():
+    tasks = [run_blocks() for _ in range(1)]  # Launch 10 concurrent workflows
+    await asyncio.gather(*tasks)  # Run them concurrently
+    engine.shutdown()
 
-engine.shutdown()
+asyncio.run(main())  # Run the event loop
