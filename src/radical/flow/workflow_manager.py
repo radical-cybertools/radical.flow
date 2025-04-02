@@ -1,18 +1,15 @@
 # flake8: noqa
 import os
 import math
-import time
-import queue
 import asyncio
-import threading
+import time
+from typing import Callable, Dict, Optional
 
 import radical.utils as ru
 import radical.pilot as rp
 
 from functools import wraps
-from typing import Callable, Dict
 from concurrent.futures import Future
-from concurrent.futures import ThreadPoolExecutor
 
 import typeguard
 from .task import Task as Block
@@ -21,54 +18,12 @@ from .data import InputFile, OutputFile
 from radical.flow.backends.execution.radical_pilot import ResourceEngine
 
 
-
 class WorkflowEngine:
     """
-    A WorkflowEngine manages and executes tasks within a Directed Acyclic Graph (DAG)
-    and Cyclic Graph (CG) structure, allowing for complex workflows where tasks may have
-    dependencies. The WorkflowEngine has the capabilities to express asynchronous and
-    adaptive: tasks, workflows and workflows of workflows (blocks). Each node in the DAG
-    represents a distinct task, workflow or block even if some nodes have identical labels.
-    This allows for flexible, reusable workflows components with intricate dependencies. To
-    summarize, the workflow engine capable of managing:
-        1- Tasks: set of application to be executed on resources.
-        2- Workflow(s): set of tasks with dependencies that requires to be executed in a certain
-           order.
-        3- Block(s): set of workflows and tasks that can/have decencies and requires to be
-           executed in a certain order.
-
-    ** Node: All of the DAG/CG components can be executed asynchronously with the possibility
-             of decision making stages (adaptively)
-
-    Workflows that utilizes the `WorkflowEngine` can have the same label or identifier, but
-    they represent distinct entities within the workflow.
-
-    Example:
-        Consider a simple DAG representation:
-
-        Nodes: A, A (two distinct nodes with identical labels)
-        Edges: A → B, A → C
-
-        Here, two nodes labeled 'A' are distinct instances connected to 'B' and 'C',
-        each with its own role in the workflow.
-
-        Note: It is possible for both A nodes to have cross dependencies on each other.
-
-    Attributes:
-        engine (ResourceEngine): An instance of `ResourceEngine`, responsible for managing the
-            runtime resources needed to execute tasks. This engine is agnostic to the specific
-            runtime context (RCT).
-
-        tasks (dict): A dictionary storing task identifiers and associated task objects (futures).
-            This enables tracking of task states and results as the workflow progresses.
-
-        dependencies (dict): A dictionary that maps each task to its list of dependencies,
-            enabling the engine to resolve dependencies before executing each task.
-
-        task_manager: This attribute references the `task_manager` provided by the
-            `ResourceEngine`, which handles the underlying task operations and states.
+    Asynchronous WorkflowEngine using asyncio event loop and coroutines.
+    Manages and executes tasks within DAG/CG structures with async/await support.
     """
-
+    
     @typeguard.typechecked
     def __init__(self, engine: ResourceEngine) -> None:
         self.tasks = {}
@@ -77,95 +32,69 @@ class WorkflowEngine:
         self.resolved = set()
         self.dependencies = {}
         self.unresolved = set()
-        self.queue = queue.Queue()
+        self.queue = asyncio.Queue()
         self.task_manager = self.engine.task_manager
-
-        # Start the submission thread
-        submission_thread = threading.Thread(target=self.submit, name='WFSubmitThread')
-        submission_thread.daemon = True
-        submission_thread.start()
-
-        # Start the run method in a background thread
-        run_thread = threading.Thread(target=self.run, name='WFRunThread')
-        run_thread.daemon = True
-        run_thread.start()
+        
+        # Start the async submission and run tasks
+        self.loop = asyncio.get_event_loop()
+        self.loop.create_task(self.submit())
+        self.loop.create_task(self.run())
 
         self.task_manager.register_callback(self.task_callbacks)
-        
-        max_threads = os.getenv('FLOW_THREADS', math.inf)
-        self._wf_submitter = ThreadPoolExecutor(max_workers=max_threads)
 
-    def as_async(self, func: Callable):
-        """
-        A decorator to run `blocking` function in a separate thread.
-        """
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            # Submit the function to the thread pool and return the Future
-            future = self._wf_submitter.submit(func, *args, **kwargs)
-            return future  # The caller can wait for the future's result if needed
-
-        return wrapper
-    
     @typeguard.typechecked
     def block(self, func: Callable):
-        """Use RoseEngine as a decorator to register workflow tasks."""
+        """Decorator to register workflow blocks as async functions."""
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            block_descriptions = Block()
+            block_descriptions['name'] = func.__name__
+            block_descriptions['args'] = args
+            block_descriptions['kwargs'] = kwargs
+            block_descriptions['function'] = func
+            block_descriptions['uid'] = self._assign_uid(prefix='block')
 
-        def decorator(func):
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                block_descriptions = Block()
-                block_descriptions['name'] = func.__name__
-                block_descriptions['args'] = args
-                block_descriptions['kwargs'] = kwargs
-                block_descriptions['function'] = func
-                block_descriptions['uid'] = self._assign_uid(prefix='block')
+            block_deps, input_files_deps, output_files_deps = self._detect_dependencies(args)
 
-                block_deps, input_files_deps, output_files_deps = self._detect_dependencies(args)
+            block_descriptions['metadata'] = {'dependencies': block_deps,
+                                              'input_files': input_files_deps,
+                                              'output_files': output_files_deps}
 
-                block_descriptions['metadata'] = {'dependencies': block_deps,
-                                                  'input_files': input_files_deps,
-                                                  'output_files': output_files_deps}
+            block_fut = Future()  # Create a Future object for this block
+            block_fut.id = block_descriptions['uid'].split('block.')[1]
+            block_fut.block = block_descriptions
 
-                block_fut = asyncio.Future()  # Create a Future object for this block
-                block_fut.id = block_descriptions['uid'].split('block.')[1]
-                block_fut.block = block_descriptions
+            self.tasks[block_descriptions['uid']] = {'future': block_fut,
+                                                     'description': block_descriptions}
+            self.dependencies[block_descriptions['uid']] = block_deps
 
-                # Store the future and block description in the tasks dictionary, keyed by UID
-                self.tasks[block_descriptions['uid']] = {'future': block_fut,
-                                                         'description': block_descriptions}
-                self.dependencies[block_descriptions['uid']] = block_deps
+            msg = f"Registered block '{block_descriptions['name']}' and id of {block_fut.id}"
+            msg += f" with dependencies: {[dep['name'] for dep in block_deps]}"
+            print(msg)
 
-                msg = f"Registered block '{block_descriptions['name']}' and id of {block_fut.id}"
-                msg += f" with dependencies: {[dep['name'] for dep in block_deps]}"
-                print(msg)
+            return block_fut
 
-                return block_fut  # Return the Future immediately
-
-            return wrapper  # Return the decorated function
-
-        return decorator(func)  # Apply the decorator immediately
+        return wrapper
 
     @typeguard.typechecked
     def __call__(self, func: Callable):
-        """Use RoseEngine as a decorator to register workflow tasks."""
+        """Decorator to register workflow tasks as async functions."""
         @wraps(func)
-        def wrapper(*args, **kwargs):
-            task_descriptions = func(*args, **kwargs)
+        async def wrapper(*args, **kwargs):
+            task_descriptions = await func(*args, **kwargs)
             task_descriptions['name'] = func.__name__
             task_descriptions['uid'] = self._assign_uid(prefix='task')
 
             task_deps, input_files_deps, output_files_deps = self._detect_dependencies(args)
 
             task_descriptions['metadata'] = {'dependencies': task_deps,
-                                             'input_files': input_files_deps,
-                                             'output_files': output_files_deps}
+                                        'input_files': input_files_deps,
+                                        'output_files': output_files_deps}
 
-            task_fut = Future()  # Create a Future object for this task
+            task_fut = self.loop.create_future()
             task_fut.id = task_descriptions['uid'].split('task.')[1]
             task_fut.task = task_descriptions
 
-            # Store the future and task description in the tasks dictionary, keyed by UID
             self.tasks[task_descriptions['uid']] = {'future': task_fut,
                                                     'description': task_descriptions}
             self.dependencies[task_descriptions['uid']] = task_deps
@@ -285,7 +214,7 @@ class WorkflowEngine:
 
         for possible_dep in possible_dependencies:
             # it is a task deps
-            if isinstance(possible_dep, Future):
+            if isinstance(possible_dep, Future) or isinstance(possible_dep, asyncio.Future):
                 if hasattr(possible_dep, 'task'):
                     possible_dep = possible_dep.task
                 elif hasattr(possible_dep, 'block'):
@@ -308,21 +237,16 @@ class WorkflowEngine:
         self.tasks.clear()
         self.dependencies.clear()
 
-
-    @shutdown_on_failure
-    def run(self):
-        """Background method to resolve dependencies and submit tasks."""
-
+    async def run(self):
+        """Async method to resolve dependencies and submit tasks."""
         while True:
-            # Continuously try to resolve dependencies and submit tasks as they become ready
-            self.unresolved = set(self.dependencies.keys())  # Start with all tasks unresolved
-
+            self.unresolved = set(self.dependencies.keys())
 
             if not self.unresolved:
-                time.sleep(0.1)  # Small delay to prevent excessive CPU usage in the loop
+                await asyncio.sleep(0.1)
                 continue
 
-            to_submit = []  # Collect tasks to submit in each iteration
+            to_submit = []
 
             for task_uid in list(self.unresolved):
                 if self.tasks[task_uid]['future'].done():
@@ -334,158 +258,108 @@ class WorkflowEngine:
                     continue
 
                 dependencies = self.dependencies[task_uid]
-
-                # Check if all dependencies have been resolved and are done
                 if all(dep['uid'] in self.resolved and self.tasks[dep['uid']]['future'].done() for dep in dependencies):
                     task_desc = self.tasks[task_uid]['description']
 
                     pre_exec = []
                     input_staging = []
 
-                    # Gather staging information for input files
                     for dep in dependencies:
                         dep_desc = self.tasks[dep['uid']]['description']
 
-                        # implicit data dependencies
                         if not dep_desc.metadata.get('output_files'):
                             pre_exec.extend(self.link_implicit_data_deps(dep_desc))
 
-                        # explicit data dependencies
                         for output_file in dep_desc.metadata['output_files']:
                             if output_file in task_desc.metadata['input_files']:
-                                input_staging.append(self.link_explicit_data_deps(dep['uid'],
-                                                                                output_file))
+                                input_staging.append(self.link_explicit_data_deps(dep['uid'], output_file))
 
-                    # Add independent input files to input_staging: local file, https file
                     for input_file in task_desc.metadata['input_files']:
                         _data_target = [item['target'].split('/')[-1] for item in input_staging]
                         if input_file not in _data_target:
-                            # FIXME: link_data_deps() must be able to link input files
                             input_staging.append({'source': input_file,
-                                                  'target': f"task:///{input_file}",
-                                                  'action': rp.TRANSFER})
+                                                'target': f"task:///{input_file}",
+                                                'action': rp.TRANSFER})
 
                     task_desc.pre_exec = pre_exec
                     task_desc.input_staging = input_staging
-
-                    # Add the task to the submission list
                     to_submit.append(task_desc)
+
                     msg = f"'{task_desc.name}' ready to submit;"
                     msg += f" resolved dependencies: {[dep['name'] for dep in dependencies]}"
                     print(msg)
 
             if to_submit:
-                # Submit collected tasks/blocks concurrently and track their futures
-                self.queue.put(to_submit)
+                await self.queue.put(to_submit)
                 for t in to_submit:
                     self.running.append(t.uid)
                     self.resolved.add(t.uid)
                     self.unresolved.remove(t.uid)
 
-            time.sleep(0.5)  # Small delay to prevent excessive CPU usage in the loop
+            await asyncio.sleep(0.5)
 
-    def task_callbacks(self, task, state):
-        """
-        Callback function to handle task state changes and set results or exceptions.
+    async def submit(self):
+        """Async method to submit tasks from the queue for execution."""
+        while True:
+            try:
+                objects = await asyncio.wait_for(self.queue.get(), timeout=1)
 
-        This method is called when the state of a task changes. It updates the corresponding 
-        `future` in the task dictionary with either the task's result or an exception, 
-        depending on the final state of the task.
+                tasks = [t for t in objects if t and 'block' not in t['uid']]
+                blocks = [t for t in objects if t and 'task' not in t['uid']]
 
-        Args:
-            task (rp.Task): The task whose state has changed.
-            state (str): The current state of the task (e.g., rp.DONE, rp.FAILED, rp.CANCELED).
+                print(f'submitting {[b.name for b in objects]} for execution')
 
-        Raises:
-            Exception: If the task has failed or was canceled, an exception is set on the future.
-        """
-        task_fut = self.tasks[task.uid]['future']
+                if tasks:
+                    self.task_manager.submit_tasks(tasks)
+                if blocks:
+                    await self._submit_blocks(blocks)
 
-        if state == rp.DONE:
-            print(f'{task.uid} is DONE')
-            task_fut.set_result(task.stdout)
-            self.running.remove(task.uid)
+            except asyncio.TimeoutError:
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                print(f"Error in submit: {e}")
+                raise
 
-        elif state in [rp.FAILED, rp.CANCELED]:
-            print(f'{task.uid} is FAILED')
-            task_fut.set_exception(Exception(task.stderr))
-            self.running.remove(task.uid)
 
-    @typeguard.typechecked
     async def _submit_blocks(self, blocks: list):
-        """
-        Submits a blocks for execution in a separate thread.
-
-        This method submits a block for execution in a separate thread using the `as_async` 
-        decorator. The block is executed in the background, and the result or exception is 
-        set on the block's future.
-
-        Args:
-            blocks (list of dicts): A dictionary containing the block's unique identifier and function
-                information, including the function to execute, arguments, and keyword arguments.
-
-        Returns:
-            Future: A future object representing the block's execution that was returned to the user
-                    during the block registration process.
-        """
+        """Async method to submit blocks for execution."""
         for block in blocks:
             args = block['args']
             kwargs = block['kwargs']
             func = block['function']
             block_fut = self.tasks[block['uid']]['future']
 
-            # Create an asyncio task
+            # Execute the block function as a coroutine
             asyncio.create_task(self.execute_block(block_fut, func, *args, **kwargs))
 
-
     async def execute_block(self, block_fut, func, *args, **kwargs):
-        """Runs the block function and updates the block_fut once complete.
-
-        Args:
-            block_fut (Future): The future object representing the block's execution.
-            func (Callable): The function to execute.
-            *args: The arguments to pass to the function.
-            **kwargs: The keyword arguments to pass to the function.
-        """
+        """Async method to execute block function and update asyncio future."""
         try:
-            result = func(*args, **kwargs)  # Run normally if it's sync
-            block_fut.set_result(result)    # Resolve block_fut with the result
+            if asyncio.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
+            else:
+                # If function is not async, run it in executor
+                result = await self.loop.run_in_executor(None, func, *args, **kwargs)
+
+            if not block_fut.done():
+                block_fut.set_result(result)
         except Exception as e:
-            block_fut.set_exception(e)      # Pass the exception to block_fut
+            if not block_fut.done():
+                block_fut.set_exception(e)
 
-    @shutdown_on_failure
-    def submit(self):
+    def task_callbacks(self, task, state):
         """
-        Submits tasks from the queue for execution in a loop until an error occurs.
-
-        This method repeatedly checks the task queue for new tasks and submits them for 
-        execution using the `task_manager.submit_tasks()` method. If the queue is empty, 
-        the method waits briefly before checking again. If any exceptions are encountered 
-        during the submission process, they are caught and logged.
-
-        The method will keep running until it encounters an error or is explicitly stopped.
-
-        Raises:
-            Exception: If any exception occurs while submitting tasks, it is logged.
+        Callback function to handle task state changes using asyncio.Future.
         """
-        while True:
-            try:
-                objects = self.queue.get(timeout=1)
+        task_fut = self.tasks[task.uid]['future']
 
-                # isolate block objects from task objects
-                tasks = [t for t in objects if t and 'block' not in t['uid']]
-                blocks = [t for t in objects if t and 'task' not in t['uid']]
-
-                print(f'submitting {[(b["name"], b["uid"]) for b in objects if isinstance(b, dict)]} for execution')
-
-                # submit each object to its respective destination
-                if tasks:
-                    self.task_manager.submit_tasks(tasks)
-                if blocks:
-                    loop = asyncio.new_event_loop()  # Create a new event loop
-                    asyncio.set_event_loop(loop)  # Set it for the current thread
-                    loop.run_until_complete(self._submit_blocks(blocks))  # Run coroutine
-                    loop.close()  # Close the loop when done
-
-            except queue.Empty:
-                time.sleep(0.5)
+        if state == rp.DONE:
+            print(f'{task.uid} is DONE')
+            if not task_fut.done():
+                task_fut.set_result(task.stdout)
+            self.running.remove(task.uid)
+        elif state in [rp.FAILED, rp.CANCELED]:
+            print(f'{task.uid} is FAILED')
+            if not task_fut.done():
+                task_fut.set_exception(Exception(task.stderr))
+            self.running.remove(task.uid)
