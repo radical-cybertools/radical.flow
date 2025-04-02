@@ -60,7 +60,7 @@ class WorkflowEngine:
                                               'input_files': input_files_deps,
                                               'output_files': output_files_deps}
 
-            block_fut = Future()  # Create a Future object for this block
+            block_fut = self.loop.create_future()  # Create a Future object for this block
             block_fut.id = block_descriptions['uid'].split('block.')[1]
             block_fut.block = block_descriptions
 
