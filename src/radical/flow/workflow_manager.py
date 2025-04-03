@@ -1,15 +1,15 @@
 # flake8: noqa
 import os
-import math
 import asyncio
-import time
+import inspect
 from typing import Callable, Dict, Optional
 
 import radical.utils as ru
 import radical.pilot as rp
 
 from functools import wraps
-from concurrent.futures import Future
+from asyncio import Future as AsyncFuture
+from concurrent.futures import Future as SyncFuture
 
 import typeguard
 from .task import Task as Block
@@ -35,12 +35,34 @@ class WorkflowEngine:
         self.queue = asyncio.Queue()
         self.task_manager = self.engine.task_manager
         
-        # Start the async submission and run tasks
-        self.loop = asyncio.get_event_loop()
-        self.loop.create_task(self.submit())
-        self.loop.create_task(self.run())
+        try:
+            self.loop = asyncio.get_running_loop()  # get current loop if running
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()    # create a new loop if none exists
+            asyncio.set_event_loop(self.loop)       # set as the default loop
+        
+        self.start_async_tasks()
 
         self.task_manager.register_callback(self.task_callbacks)
+
+    
+    def start_async_tasks(self):
+        """Starts async tasks in both sync and async contexts."""
+        def _start():
+            self.loop.create_task(self.submit())  # let's schedule submit() in loop
+            self.loop.create_task(self.run())     # let's schedule run() in loop
+            if not self.loop.is_running():
+                self.loop.run_forever()  # keep the event loop alive
+
+        # 🔹 CASE 1: called from an async namespace
+        if self.loop.is_running():
+            asyncio.create_task(self.submit())
+            asyncio.create_task(self.run())
+        else:
+            # 🔹 CASE 2: called from a sync namespace
+            import threading
+            thread = threading.Thread(target=_start, daemon=True)
+            thread.start()
 
     @typeguard.typechecked
     def block(self, func: Callable):
@@ -60,7 +82,8 @@ class WorkflowEngine:
                                               'input_files': input_files_deps,
                                               'output_files': output_files_deps}
 
-            block_fut = self.loop.create_future()  # Create a Future object for this block
+            # Create a Future object for this block
+            block_fut = self.loop.create_future()
             block_fut.id = block_descriptions['uid'].split('block.')[1]
             block_fut.block = block_descriptions
 
@@ -78,34 +101,51 @@ class WorkflowEngine:
 
     @typeguard.typechecked
     def __call__(self, func: Callable):
-        """Decorator to register workflow tasks as async functions."""
+        """Decorator that handles both sync and async functions."""
         @wraps(func)
-        async def wrapper(*args, **kwargs):
-            task_descriptions = await func(*args, **kwargs)
-            task_descriptions['name'] = func.__name__
-            task_descriptions['uid'] = self._assign_uid(prefix='task')
+        def wrapper(*args, **kwargs):
+            # Detect if we're in async context
+            is_async = asyncio.iscoroutinefunction(func) or inspect.iscoroutinefunction(wrapper)
 
-            task_deps, input_files_deps, output_files_deps = self._detect_dependencies(args)
+            func_obj = {'func': func,
+                        'args': args,
+                        'kwargs': kwargs}
 
-            task_descriptions['metadata'] = {'dependencies': task_deps,
-                                        'input_files': input_files_deps,
-                                        'output_files': output_files_deps}
-
-            task_fut = self.loop.create_future()
-            task_fut.id = task_descriptions['uid'].split('task.')[1]
-            task_fut.task = task_descriptions
-
-            self.tasks[task_descriptions['uid']] = {'future': task_fut,
-                                                    'description': task_descriptions}
-            self.dependencies[task_descriptions['uid']] = task_deps
-
-            msg = f"Registered task '{task_descriptions['name']}' and id of {task_fut.id}"
-            msg += f" with dependencies: {[dep['name'] for dep in task_deps]}"
-            print(msg)
-
-            return task_fut
+            if is_async:
+                async def async_wrapper():
+                    task_desc = await func(*args, **kwargs)
+                    return self._register_task(func_obj, task_desc, is_async=True)
+                return async_wrapper()
+            else:
+                task_desc = func(*args, **kwargs)
+                return self._register_task(func_obj, task_desc, is_async=False)
 
         return wrapper
+
+    def _register_task(self, func_obj: dict, task_descriptions: dict, is_async: bool):
+        """Shared task registration logic."""
+        task_descriptions['name'] = func_obj['func'].__name__
+        task_descriptions['uid'] = self._assign_uid(prefix='task')
+
+        task_deps, input_files_deps, output_files_deps = self._detect_dependencies(func_obj['args'])
+
+        task_descriptions['metadata'] = {'dependencies': task_deps,
+                                         'input_files': input_files_deps,
+                                         'output_files': output_files_deps}
+
+        # Create appropriate future type
+        task_fut = AsyncFuture() if is_async else SyncFuture()
+        task_fut.id = task_descriptions['uid'].split('task.')[1]
+        task_fut.task = task_descriptions
+
+        self.tasks[task_descriptions['uid']] = {'future': task_fut,
+                                                'description': task_descriptions}
+
+        self.dependencies[task_descriptions['uid']] = task_deps
+
+        print(f"Registered task '{task_descriptions['name']}' with id of {task_descriptions['uid']}")
+
+        return task_fut
 
     @staticmethod
     def shutdown_on_failure(func: Callable):
@@ -214,7 +254,7 @@ class WorkflowEngine:
 
         for possible_dep in possible_dependencies:
             # it is a task deps
-            if isinstance(possible_dep, Future) or isinstance(possible_dep, asyncio.Future):
+            if isinstance(possible_dep, SyncFuture) or isinstance(possible_dep, AsyncFuture):
                 if hasattr(possible_dep, 'task'):
                     possible_dep = possible_dep.task
                 elif hasattr(possible_dep, 'block'):
@@ -285,8 +325,8 @@ class WorkflowEngine:
                     task_desc.input_staging = input_staging
                     to_submit.append(task_desc)
 
-                    msg = f"'{task_desc.name}' ready to submit;"
-                    msg += f" resolved dependencies: {[dep['name'] for dep in dependencies]}"
+                    msg = f"Ready to submit: {task_desc.name}."
+                    msg += f" Resolved dependencies: {[dep['name'] for dep in dependencies]}"
                     print(msg)
 
             if to_submit:
@@ -307,7 +347,7 @@ class WorkflowEngine:
                 tasks = [t for t in objects if t and 'block' not in t['uid']]
                 blocks = [t for t in objects if t and 'task' not in t['uid']]
 
-                print(f'submitting {[b.name for b in objects]} for execution')
+                print(f'Submitting {[b.name for b in objects]} for execution')
 
                 if tasks:
                     self.task_manager.submit_tasks(tasks)
