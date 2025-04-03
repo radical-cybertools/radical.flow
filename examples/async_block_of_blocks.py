@@ -53,7 +53,7 @@ async def main():
         await bob2
         print(f'Block of block-{i} is finished')
 
-    results = await asyncio.gather(*[run_block_of_blocks(i) for i in range(1)])
+    results = await asyncio.gather(*[run_block_of_blocks(i) for i in range(1024)])
 
     engine.shutdown()
 

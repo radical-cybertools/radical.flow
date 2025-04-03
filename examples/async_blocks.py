@@ -67,7 +67,7 @@ async def main():
 
 
     # Run workflows concurrently
-    results = await asyncio.gather(*[run_blocks(i) for i in range(1)])
+    results = await asyncio.gather(*[run_blocks(i) for i in range(1024)])
 
     for result in results:
         print(result)
