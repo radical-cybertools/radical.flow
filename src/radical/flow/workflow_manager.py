@@ -22,14 +22,49 @@ BLOCK = 'block'
 
 class WorkflowEngine:
     """
-    Asynchronous WorkflowEngine using asyncio event loop and coroutines.
-    Manages and executes tasks within DAG/CG structures with async/await support.
+    WorkflowEngine is an asynchronous workflow manager that uses asyncio event loops 
+    and coroutines to manage and execute workflow components (blocks and/or tasks) 
+    within Directed Acyclic Graph (DAG) or Chain Graph (CG) structures. It provides 
+    support for async/await operations and handles task dependencies, input/output 
+    data staging, and execution.
+    
+    Inputs:
+        engine (ResourceEngine): The resource engine used for task management.
+        task_manager (TaskManager): The task manager associated with the resource
+        engine.
+        loop (asyncio.AbstractEventLoop): The asyncio event loop used for asynchronous
+        operations.
+    
+    Methods:
+        __call__(func: Callable):
+            Decorator to register workflow tasks.
+        block(func: Callable):
+            Decorator to register workflow blocks.
+        start_async_tasks():
+            Starts asynchronous tasks in both synchronous and asynchronous contexts.
+        shutdown_on_failure(func: Callable):
+        link_explicit_data_deps(task_id: str, file_name: Optional[str] = None) -> dict:
+        link_implicit_data_deps(src_task: Task) -> list:
+        _detect_dependencies(possible_dependencies: list) -> tuple:
+        _clear():
+            Clears workflow components and their dependencies.
+        async run():
+            Manages the execution of workflow components by resolving dependencies and 
+            submitting them for execution once they are resolved.
+        async submit():
+            Submits blocks or tasks from the queue for execution.
+        async _submit_blocks(blocks: list):
+            Submits blocks for execution.
+        async execute_block(block_fut, func, *args, **kwargs):
+            Executes a block function and updates its asyncio future.
+        task_callbacks(task, state):
+        _assign_uid(prefix: str) -> str:
     """
     
     @typeguard.typechecked
     def __init__(self, engine: ResourceEngine) -> None:
-        self.tasks = {}
         self.running = []
+        self.components = {}
         self.engine = engine
         self.resolved = set()
         self.dependencies = {}
@@ -120,8 +155,8 @@ class WorkflowEngine:
         comp_fut.id = comp_descriptions['uid'].split(f'{comp_type}.')[1]
         setattr(comp_fut, comp_type, comp_descriptions)
 
-        self.tasks[comp_descriptions['uid']] = {'future': comp_fut,
-                                                'description': comp_descriptions}
+        self.components[comp_descriptions['uid']] = {'future': comp_fut,
+                                                     'description': comp_descriptions}
 
         self.dependencies[comp_descriptions['uid']] = comp_deps
 
@@ -145,13 +180,14 @@ class WorkflowEngine:
 
     def _assign_uid(self, prefix):
         """
-        Generates a unique identifier (UID) for a task.
+        Generates a unique identifier (UID) for a flow component.
 
-        This method generates a custom task UID based on the format `task.%(item_counter)06d`
-        and assigns it a session-specific namespace using the engine session UID.
+        This method generates a custom flow component UID based on the format
+        `task.%(item_counter)06d` and assigns it a session-specific namespace
+        using the engine session UID.
 
         Returns:
-            str: The generated unique identifier for the task.
+            str: The generated unique identifier for the flow component.
         """
         uid = ru.generate_id(prefix, ru.ID_SIMPLE)
 
@@ -211,21 +247,23 @@ class WorkflowEngine:
 
     def _detect_dependencies(self, possible_dependencies):
         """
-        Detects and categorizes possible dependencies into tasks, input files, and output files.
+        Detects and categorizes possible dependencies into blocks/tasks, input files,
+        and output files.
 
-        This method iterates over a list of possible dependencies and classifies them into three
-          categories:
-        - Tasks that are instances of `Future` with a `task` attribute (task dependencies).
-        - Input files that are instances of `InputFile` (files required by the task).
-        - Output files that are instances of `OutputFile` (files produced by the task).
+        This method iterates over a list of possible dependencies and classifies
+        them into three categories:
+        - Blocks/Tasks that are instances of `Future` with a `task` or `block` attribute
+          (task dependencies).
+        - Input files that are instances of `InputFile` (files required by the task only).
+        - Output files that are instances of `OutputFile` (files produced by the task only).
 
         Args:
             possible_dependencies (list): A list of possible dependencies, which can include
-            tasks, input files, and output files.
+            blocks, tasks, input files, and output files.
 
         Returns:
             tuple: A tuple containing three lists:
-                - `dependencies`: A list of tasks that need to be completed.
+                - `dependencies`: A list of flow components that need to be completed.
                 - `input_files`: A list of input file names that need to be fetched.
                 - `output_files`: A list of output file names that need to be retrieved
                    from the task folder.
@@ -235,7 +273,7 @@ class WorkflowEngine:
         output_files = []
 
         for possible_dep in possible_dependencies:
-            # it is a task deps
+            # it is a flow component deps
             if isinstance(possible_dep, SyncFuture) or isinstance(possible_dep, AsyncFuture):
                 if hasattr(possible_dep, TASK):
                     possible_dep = possible_dep.task
@@ -253,14 +291,44 @@ class WorkflowEngine:
 
     def _clear(self):
         """
-        clear workflow tasks and their deps
+        clear workflow component and their deps
         """
 
-        self.tasks.clear()
+        self.components.clear()
         self.dependencies.clear()
 
     async def run(self):
-        """Async method to resolve dependencies and submit tasks."""
+        """
+        Async method to manage the execution of workflow components by resolving
+        dependencies and submitting then for execution once they are resolved.
+
+        This method continuously checks for unresolved components, evaluates their
+        dependencies, and prepares them for submission if all dependencies are resolved.
+        It also handles input and output data staging for the components.
+
+        Workflow:
+        - Identifies unresolved components.
+        - Checks if their dependencies are resolved and their associated tasks are completed.
+        - Prepares components for execution by setting up pre-execution commands and
+          input staging based on dependencies.
+        - Submits components that are ready for execution to the queue.
+
+        Attributes:
+            unresolved (set): A set of component UIDs that have unresolved dependencies.
+            resolved (set): A set of component UIDs whose dependencies are resolved.
+            running (list): A list of component UIDs that are currently running.
+            dependencies (dict): A mapping of component UIDs to their dependency information.
+            components (dict): A mapping of component UIDs to their descriptions and futures.
+            queue (asyncio.Queue): A queue to submit components ready for execution.
+
+        Raises:
+            asyncio.CancelledError: If the coroutine is cancelled during execution.
+
+        Notes:
+            - This method runs indefinitely until cancelled.
+            - It uses a sleep interval to avoid busy-waiting.
+        """
+
         while True:
             self.unresolved = set(self.dependencies.keys())
 
@@ -270,44 +338,44 @@ class WorkflowEngine:
 
             to_submit = []
 
-            for task_uid in list(self.unresolved):
-                if self.tasks[task_uid]['future'].done():
-                    self.resolved.add(task_uid)
-                    self.unresolved.remove(task_uid)
+            for comp_uid in list(self.unresolved):
+                if self.components[comp_uid]['future'].done():
+                    self.resolved.add(comp_uid)
+                    self.unresolved.remove(comp_uid)
                     continue
 
-                if task_uid in self.running:
+                if comp_uid in self.running:
                     continue
 
-                dependencies = self.dependencies[task_uid]
-                if all(dep['uid'] in self.resolved and self.tasks[dep['uid']]['future'].done() for dep in dependencies):
-                    task_desc = self.tasks[task_uid]['description']
+                dependencies = self.dependencies[comp_uid]
+                if all(dep['uid'] in self.resolved and self.components[dep['uid']]['future'].done() for dep in dependencies):
+                    comp_desc = self.components[comp_uid]['description']
 
                     pre_exec = []
                     input_staging = []
 
                     for dep in dependencies:
-                        dep_desc = self.tasks[dep['uid']]['description']
+                        dep_desc = self.components[dep['uid']]['description']
 
                         if not dep_desc.metadata.get('output_files'):
                             pre_exec.extend(self.link_implicit_data_deps(dep_desc))
 
                         for output_file in dep_desc.metadata['output_files']:
-                            if output_file in task_desc.metadata['input_files']:
+                            if output_file in comp_desc.metadata['input_files']:
                                 input_staging.append(self.link_explicit_data_deps(dep['uid'], output_file))
 
-                    for input_file in task_desc.metadata['input_files']:
+                    for input_file in comp_desc.metadata['input_files']:
                         _data_target = [item['target'].split('/')[-1] for item in input_staging]
                         if input_file not in _data_target:
                             input_staging.append({'source': input_file,
                                                  'target': f"task:///{input_file}",
                                                  'action': rp.TRANSFER})
 
-                    task_desc.pre_exec = pre_exec
-                    task_desc.input_staging = input_staging
-                    to_submit.append(task_desc)
+                    comp_desc.pre_exec = pre_exec
+                    comp_desc.input_staging = input_staging
+                    to_submit.append(comp_desc)
 
-                    msg = f"Ready to submit: {task_desc.name}"
+                    msg = f"Ready to submit: {comp_desc.name}"
                     msg += f" with resolved dependencies: {[dep['name'] for dep in dependencies]}"
                     print(msg)
 
@@ -321,13 +389,13 @@ class WorkflowEngine:
             await asyncio.sleep(0.5)
 
     async def submit(self):
-        """Async method to submit tasks from the queue for execution."""
+        """Async method to submit blocks or tasks from the queue for execution."""
         while True:
             try:
                 objects = await asyncio.wait_for(self.queue.get(), timeout=1)
 
                 tasks = [t for t in objects if t and BLOCK not in t['uid']]
-                blocks = [t for t in objects if t and TASK not in t['uid']]
+                blocks = [b for b in objects if b and TASK not in b['uid']]
 
                 print(f'Submitting {[b.name for b in objects]} for execution')
 
@@ -342,14 +410,13 @@ class WorkflowEngine:
                 print(f"Error in submit: {e}")
                 raise
 
-
     async def _submit_blocks(self, blocks: list):
         """Async method to submit blocks for execution."""
         for block in blocks:
             args = block['args']
             kwargs = block['kwargs']
             func = block['function']
-            block_fut = self.tasks[block['uid']]['future']
+            block_fut = self.components[block['uid']]['future']
 
             # Execute the block function as a coroutine
             asyncio.create_task(self.execute_block(block_fut, func, *args, **kwargs))
@@ -374,7 +441,7 @@ class WorkflowEngine:
         """
         Callback function to handle task state changes using asyncio.Future.
         """
-        task_fut = self.tasks[task.uid]['future']
+        task_fut = self.components[task.uid]['future']
 
         if state == rp.DONE:
             print(f'{task.uid} is DONE')
