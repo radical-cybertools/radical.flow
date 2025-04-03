@@ -1,7 +1,7 @@
 # flake8: noqa
-import os
 import asyncio
 import inspect
+import threading
 from typing import Callable, Dict, Optional
 
 import radical.utils as ru
@@ -54,13 +54,12 @@ class WorkflowEngine:
             if not self.loop.is_running():
                 self.loop.run_forever()  # keep the event loop alive
 
-        # 🔹 CASE 1: called from an async namespace
+        # case1: called from an async namespace
         if self.loop.is_running():
             asyncio.create_task(self.submit())
             asyncio.create_task(self.run())
         else:
-            # 🔹 CASE 2: called from a sync namespace
-            import threading
+            # case2: called from a sync namespace
             thread = threading.Thread(target=_start, daemon=True)
             thread.start()
 
@@ -105,7 +104,8 @@ class WorkflowEngine:
         @wraps(func)
         def wrapper(*args, **kwargs):
             # Detect if we're in async context
-            is_async = asyncio.iscoroutinefunction(func) or inspect.iscoroutinefunction(wrapper)
+            is_async = asyncio.iscoroutinefunction(func) or \
+                 inspect.iscoroutinefunction(wrapper)
 
             func_obj = {'func': func,
                         'args': args,
