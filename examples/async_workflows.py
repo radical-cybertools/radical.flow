@@ -27,10 +27,6 @@ async def main():
     async def task5(*args):
         return Task(executable='/bin/echo "I got executed at" && /bin/date') 
 
-    @flow
-    async def task6(*args):
-        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
-
     async def run_wf(wf_id):
         print(f'\nStarting workflow {wf_id}')
         t1 = await task1()
