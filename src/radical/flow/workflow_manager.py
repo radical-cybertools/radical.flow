@@ -1,6 +1,7 @@
 # flake8: noqa
 import asyncio
 import inspect
+import logging
 import threading
 from typing import Callable, Dict, Optional
 
@@ -82,6 +83,12 @@ class WorkflowEngine:
 
         self.task_manager.register_callback(self.task_callbacks)
 
+        self._profiler = ru.Profiler(name='workflow_manager',
+                         ns='rose', path=self.engine._session.path)
+
+        logging.basicConfig(filename=f'{self.engine._session.path}/workflow_manager.log',
+                            level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
     
     def start_async_tasks(self):
         """Starts async tasks in both sync and async contexts."""
@@ -103,36 +110,39 @@ class WorkflowEngine:
     @typeguard.typechecked
     def __call__(self, func: Callable):
         """Decorator to register workflow tasks."""
-        return self._handle_flow_component_registration(func, TASK)
+        return self._handle_flow_component_registration(func, comp_type=TASK)
 
     @typeguard.typechecked
     def block(self, func: Callable):
         """Decorator to register workflow blocks."""
-        return self._handle_flow_component_registration(func, BLOCK)
+        return self._handle_flow_component_registration(func, comp_type=BLOCK)
 
     def _handle_flow_component_registration(self, func: Callable, comp_type: str):
         """Universal decorator logic for both tasks and blocks."""
         @wraps(func)
         def wrapper(*args, **kwargs):
-            is_async = asyncio.iscoroutinefunction(func) or \
-                         inspect.iscoroutinefunction(wrapper)
-            func_obj = {'func': func, 'args': args, 'kwargs': kwargs}
+            is_async = asyncio.iscoroutinefunction(func)
 
+            func_obj = {'func': func, 'args': args, 'kwargs': kwargs}    
             if is_async:
+                comp_fut = AsyncFuture()
                 async def async_wrapper():
                     comp_desc = await func(*args, **kwargs) if comp_type == TASK else Block()
-                    return self._register_component(comp_type, func_obj,
+                    return self._register_component(comp_fut, comp_type, func_obj,
                                                     comp_desc, is_async=True)
-                return async_wrapper()
+                asyncio.create_task(async_wrapper())
+                return comp_fut
             else:
+                comp_fut = SyncFuture()
                 comp_desc = func(*args, **kwargs) if comp_type == TASK else Block()
-                return self._register_component(comp_type, func_obj,
-                                                comp_desc, is_async=False)
+                self._register_component(comp_fut, comp_type, func_obj,
+                                         comp_desc, is_async=False)
+                return comp_fut
 
         return wrapper
 
 
-    def _register_component(self, comp_type: str, func_obj: dict,
+    def _register_component(self, comp_fut, comp_type: str, func_obj: dict,
                             comp_descriptions: dict, is_async: bool):
         """Shared task/block registration logic."""
         comp_descriptions['name'] = func_obj['func'].__name__
@@ -150,8 +160,6 @@ class WorkflowEngine:
                                          'input_files' : input_files_deps,
                                          'output_files': output_files_deps}
 
-        # Create appropriate future type
-        comp_fut = AsyncFuture() if is_async else SyncFuture()
         comp_fut.id = comp_descriptions['uid'].split(f'{comp_type}.')[1]
         setattr(comp_fut, comp_type, comp_descriptions)
 
@@ -160,7 +168,7 @@ class WorkflowEngine:
 
         self.dependencies[comp_descriptions['uid']] = comp_deps
 
-        print(f"Registered {comp_type}: '{comp_descriptions['name']}' with id of {comp_descriptions['uid']}")
+        logging.debug(f"Registered {comp_type}: '{comp_descriptions['name']}' with id of {comp_descriptions['uid']}")
 
         return comp_fut
 
@@ -173,7 +181,7 @@ class WorkflowEngine:
             try:
                 return func(self, *args, **kwargs)
             except Exception as e:
-                print('Internal failure is detected, shutting down the resource engine')
+                logging.exception('Internal failure is detected, shutting down the resource engine')
                 self.engine.shutdown()  # Call shutdown on exception
                 raise e
         return wrapper
@@ -377,7 +385,7 @@ class WorkflowEngine:
 
                     msg = f"Ready to submit: {comp_desc.name}"
                     msg += f" with resolved dependencies: {[dep['name'] for dep in dependencies]}"
-                    print(msg)
+                    logging.debug(msg)
 
             if to_submit:
                 await self.queue.put(to_submit)
@@ -397,7 +405,7 @@ class WorkflowEngine:
                 tasks = [t for t in objects if t and BLOCK not in t['uid']]
                 blocks = [b for b in objects if b and TASK not in b['uid']]
 
-                print(f'Submitting {[b.name for b in objects]} for execution')
+                logging.debug(f'Submitting {[b.name for b in objects]} for execution')
 
                 if tasks:
                     self.task_manager.submit_tasks(tasks)
@@ -407,7 +415,7 @@ class WorkflowEngine:
             except asyncio.TimeoutError:
                 await asyncio.sleep(0.5)
             except Exception as e:
-                print(f"Error in submit: {e}")
+                logging.exception(f"Error in submit: {e}")
                 raise
 
     async def _submit_blocks(self, blocks: list):
@@ -428,7 +436,6 @@ class WorkflowEngine:
                 result = await func(*args, **kwargs)
             else:
                 # If function is not async, run it in executor
-                print(func)
                 result = await self.loop.run_in_executor(None, func, *args, **kwargs)
 
             if not block_fut.done():
@@ -444,12 +451,12 @@ class WorkflowEngine:
         task_fut = self.components[task.uid]['future']
 
         if state == rp.DONE:
-            print(f'{task.uid} is DONE')
+            logging.debug(f'{task.uid} is DONE')
             if not task_fut.done():
                 task_fut.set_result(task.stdout)
             self.running.remove(task.uid)
         elif state in [rp.FAILED, rp.CANCELED]:
-            print(f'{task.uid} is FAILED')
+            logging.debug(f'{task.uid} is FAILED')
             if not task_fut.done():
                 task_fut.set_exception(Exception(task.stderr))
             self.running.remove(task.uid)
