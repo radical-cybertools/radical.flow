@@ -42,7 +42,7 @@ async def main():
 
     # Run workflows concurrently
     results = await asyncio.gather(*[run_wf(i) for i in range(1024)])
-    
+
     for result in results:
         print(result)
 

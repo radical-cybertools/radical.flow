@@ -1,6 +1,6 @@
 # flake8: noqa
+import os
 import asyncio
-import inspect
 import logging
 import threading
 from typing import Callable, Dict, Optional
@@ -35,18 +35,23 @@ class WorkflowEngine:
         engine.
         loop (asyncio.AbstractEventLoop): The asyncio event loop used for asynchronous
         operations.
-    
+
     Methods:
         __call__(func: Callable):
             Decorator to register workflow tasks.
         block(func: Callable):
             Decorator to register workflow blocks.
-        start_async_tasks():
+        _start_async_tasks():
             Starts asynchronous tasks in both synchronous and asynchronous contexts.
         shutdown_on_failure(func: Callable):
+            Decorator that calls `shutdown` if an exception occurs in the decorated function.
         link_explicit_data_deps(task_id: str, file_name: Optional[str] = None) -> dict:
+            Creates a dictionary linking explicit data dependencies between tasks.
         link_implicit_data_deps(src_task: Task) -> list:
+            Generates commands to link implicit data dependencies for a source task.
         _detect_dependencies(possible_dependencies: list) -> tuple:
+            Detects and categorizes possible dependencies into blocks/tasks, input files,
+            and output files.
         _clear():
             Clears workflow components and their dependencies.
         async run():
@@ -59,11 +64,21 @@ class WorkflowEngine:
         async execute_block(block_fut, func, *args, **kwargs):
             Executes a block function and updates its asyncio future.
         task_callbacks(task, state):
+            Callback function to handle task state changes using asyncio.Future.
         _assign_uid(prefix: str) -> str:
+            Generates a unique identifier (UID) for a flow component.
+        _is_in_jupyter() -> bool:
+            Detects if the code is running in a Jupyter Notebook environment.
+        _set_loop():
+            Detects and sets the asyncio event loop based on the execution context.
+        _register_component(comp_fut, comp_type: str, func_obj: dict, comp_descriptions:
+            dict, is_async: bool):
+            Shared logic for registering tasks or blocks as workflow components.
     """
-    
+
     @typeguard.typechecked
-    def __init__(self, engine: ResourceEngine) -> None:
+    def __init__(self, engine: ResourceEngine, jupyter_async=None) -> None:
+        self.loop = None
         self.running = []
         self.components = {}
         self.engine = engine
@@ -73,24 +88,86 @@ class WorkflowEngine:
         self.queue = asyncio.Queue()
         self.task_manager = self.engine.task_manager
 
-        try:
-            self.loop = asyncio.get_running_loop()  # get current loop if running
-        except RuntimeError:
-            self.loop = asyncio.new_event_loop()    # create a new loop if none exists
-            asyncio.set_event_loop(self.loop)       # set as the default loop
-        
-        self.start_async_tasks()
+        self.jupyter_async = jupyter_async if jupyter_async is not None else \
+                             os.environ.get('FLOW_JUPYTER_ASYNC', None)
+
+        self._set_loop() # detect and set the event-loop 
+        self._start_async_tasks() # start the solver and submitter
 
         self.task_manager.register_callback(self.task_callbacks)
 
         self._profiler = ru.Profiler(name='workflow_manager',
-                         ns='rose', path=self.engine._session.path)
+                                     ns='radical.flow', path=self.engine._session.path)
 
         logging.basicConfig(filename=f'{self.engine._session.path}/workflow_manager.log',
                             level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-    
-    def start_async_tasks(self):
+    def _is_in_jupyter(self):
+        return "JPY_PARENT_PID" in os.environ
+
+    def _set_loop(self):
+        """
+        Configure and set the asyncio event loop for the current context.
+
+        This method determines the appropriate asyncio event loop to use based on
+        the execution environment (e.g., Jupyter, IPython, or standard Python).
+        It handles both synchronous and asynchronous execution modes and ensures
+        that a valid event loop is set.
+
+        Raises:
+            ValueError: If running in a Jupyter environment and the `jupyter_async`
+                        parameter or the `FLOW_JUPYTER_ASYNC` environment variable
+                        is not set.
+            RuntimeError: If no event loop could be obtained or created.
+
+        Notes:
+            - In Jupyter, the behavior depends on the `jupyter_async` parameter:
+              - If `True`, the existing loop is reused for asynchronous execution.
+              - If `False`, a new loop is created for synchronous execution.
+            - In IPython, the existing loop is reused.
+            - In standard Python, a new loop is created if none exists.
+        """
+        try:
+            # get current loop if running
+            loop = asyncio.get_running_loop()
+
+            if loop and self._is_in_jupyter():
+                # We can detect if we the user wants to execute
+                # **sync/async** function unless we are instructed to so we fail.
+                if self.jupyter_async is None:
+                    exception_msg = ('Jupyter requires async/sync mode to be '
+                                     ' set via the "jupyter_async" parameter or '
+                                     'the "FLOW_JUPYTER_ASYNC" environment variable.')
+                    raise ValueError(exception_msg)
+
+                elif isinstance(self.jupyter_async, str):
+                    self.jupyter_async = True if self.jupyter_async == 'TRUE' else False
+
+                if self.jupyter_async:
+                    # Jupyter async context and runs **async** functions
+                    self.loop = loop
+                    logging.debug('Running within Async Jupyter and loop is found/re-used')
+                else:
+                    # Jupyter async context and runs **sync** functions
+                    self.loop = asyncio.new_event_loop()
+                    logging.debug('Running within Sync Jupyter and new loop is created')
+            else:
+                # IPython async context and runs **async/sync** functions
+                self.loop = loop
+                logging.debug('Running within IPython loop is found/re-used')
+
+        except RuntimeError:
+            # Python sync context and runs **async/sync** functions
+            self.loop = asyncio.new_event_loop()    # create a new loop if none exists
+            logging.debug('No loop was found, new loop is created/set')
+
+        if not self.loop:
+            raise RuntimeError('Failed to obtain or create a new event-loop for unknown reason')
+
+        asyncio.set_event_loop(self.loop)
+        logging.debug('Event-Loop is set successfully')
+
+    def _start_async_tasks(self):
         """Starts async tasks in both sync and async contexts."""
         def _start():
             self.loop.create_task(self.submit())  # let's schedule submit() in loop
@@ -140,7 +217,6 @@ class WorkflowEngine:
                 return comp_fut
 
         return wrapper
-
 
     def _register_component(self, comp_fut, comp_type: str, func_obj: dict,
                             comp_descriptions: dict, is_async: bool):
