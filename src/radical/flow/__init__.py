@@ -3,7 +3,9 @@ import radical.utils as _ru
 
 from radical.flow.task import Task
 from radical.flow.workflow_manager import WorkflowEngine
-from radical.flow.backends.execution.radical_pilot import ResourceEngine
+from radical.flow.backends.execution.thread_pool import ThreadExecutionBackend
+from radical.flow.backends.execution.process_pool import ProcessExecutionBackend
+from radical.flow.backends.execution.radical_pilot import RadicalExecutionEngine
 
 
 # ------------------------------------------------------------------------------

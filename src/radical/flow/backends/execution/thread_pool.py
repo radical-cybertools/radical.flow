@@ -1,14 +1,32 @@
 import os
-import subprocess
 import typeguard
+import subprocess
+import radical.utils as ru
 from typing import Dict, Callable
 from concurrent.futures import ThreadPoolExecutor, Future
-import radical.pilot as rp
-import radical.utils as ru
 
-class Session():
-    def __init__(self):
-        self.path = os.getcwd()
+from .base import BaseExecutionBackend
+
+
+class ThreadExecutionBackend(BaseExecutionBackend):
+    @typeguard.typechecked
+    def __init__(self, resources: Dict):
+        self._session = Session()
+        self.task_manager = TaskManager()
+
+    def state(self):
+        pass
+
+    def task_state_cb(self):
+        pass
+
+    def submit_tasks(self, tasks):
+        return self.task_manager.submit_tasks(tasks)
+
+    def shutdown(self) -> None:
+        self.task_manager.shutdown(cancel_futures=True)
+        print('Shutdown is triggered, terminating the resources gracefully')
+
 
 class TaskManager(ThreadPoolExecutor):
     def __init__(self):
@@ -26,7 +44,7 @@ class TaskManager(ThreadPoolExecutor):
 
     def _task_wrapper(self, task):
         exec_list = [task['executable']]
-        exec_list.extend(task.get('arguments', []))  # fixed extend usage
+        exec_list.extend(task.get('arguments', []))
 
         result = subprocess.run(exec_list, capture_output=True, text=True, shell=True)
 
@@ -38,20 +56,6 @@ class TaskManager(ThreadPoolExecutor):
         state = 'DONE' if result.returncode == 0 else 'FAILED'
         return task, state
 
-
-class ResourceEngine:
-
-    @typeguard.typechecked
-    def __init__(self, resources: Dict) -> None:
-        self._session = Session()
-        self.task_manager = TaskManager()
-
-    def state(self):
-        raise NotImplementedError
-
-    def task_state_cb(self, task, state):
-        raise NotImplementedError
-
-    def shutdown(self) -> None:
-        self.task_manager.shutdown(cancel_futures=True)
-        print('Shutdown is triggered, terminating the resources gracefully')
+class Session():
+    def __init__(self):
+        self.path = os.getcwd()

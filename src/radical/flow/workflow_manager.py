@@ -16,7 +16,7 @@ import typeguard
 from .task import Task as Block
 from .data import InputFile, OutputFile
 
-from radical.flow.backends.execution.radical_pilot import ResourceEngine
+from radical.flow.backends.execution.base import BaseExecutionBackend
 
 TASK = 'task'
 BLOCK = 'block'
@@ -77,7 +77,7 @@ class WorkflowEngine:
     """
 
     @typeguard.typechecked
-    def __init__(self, engine: ResourceEngine, jupyter_async=None) -> None:
+    def __init__(self, engine: BaseExecutionBackend, jupyter_async=None) -> None:
         self.loop = None
         self.running = []
         self.components = {}
@@ -132,8 +132,8 @@ class WorkflowEngine:
             loop = asyncio.get_running_loop()
 
             if loop and self._is_in_jupyter():
-                # We can detect if we the user wants to execute
-                # **sync/async** function unless we are instructed to so we fail.
+                # We can not detect if the user wants to execute
+                # **sync/async** function unless we are instructed to, so we fail.
                 if self.jupyter_async is None:
                     exception_msg = ('Jupyter requires async/sync mode to be '
                                      ' set via the "jupyter_async" parameter or '
