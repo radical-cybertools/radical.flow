@@ -6,7 +6,7 @@ import subprocess
 from typing import Dict, Callable
 from dask.distributed import Client, Future, as_completed
 
-from .base import BaseExecutionBackend
+from .base import Session, BaseExecutionBackend
 
 
 class DaskExecutionBackend(BaseExecutionBackend):
@@ -14,6 +14,7 @@ class DaskExecutionBackend(BaseExecutionBackend):
     def __init__(self, resources: Dict):
         self._session = Session()
         self.task_manager = TaskManager(resources)
+        print('Dask-Parallel execution backend started successfully')
 
     def state(self):
         return "RUNNING"  # you can expand this if needed
@@ -61,8 +62,3 @@ class TaskManager:
 
         state = 'DONE' if result.returncode == 0 else 'FAILED'
         return task, state
-
-
-class Session:
-    def __init__(self):
-        self.path = os.getcwd()

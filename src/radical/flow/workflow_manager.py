@@ -16,6 +16,7 @@ import typeguard
 from .task import Task as Block
 from .data import InputFile, OutputFile
 
+from radical.flow.backends.execution.noop import NoopExecutionBackend
 from radical.flow.backends.execution.base import BaseExecutionBackend
 
 TASK = 'task'
@@ -28,14 +29,11 @@ class WorkflowEngine:
     within Directed Acyclic Graph (DAG) or Chain Graph (CG) structures. It provides 
     support for async/await operations and handles task dependencies, input/output 
     data staging, and execution.
-    
-    Inputs:
-        engine (ResourceEngine): The resource engine used for task management.
-        task_manager (TaskManager): The task manager associated with the resource
-        engine.
-        loop (asyncio.AbstractEventLoop): The asyncio event loop used for asynchronous
-        operations.
 
+    Inputs:
+        engine (BaseExecutionBackend): The backend used for task management/execution.
+        dry_run : Enable dry run execution mode with no computational resources.
+        jupyter_async: enable the execution of async tasks within Jupyter.
     Methods:
         __call__(func: Callable):
             Decorator to register workflow tasks.
@@ -77,20 +75,33 @@ class WorkflowEngine:
     """
 
     @typeguard.typechecked
-    def __init__(self, engine: BaseExecutionBackend, jupyter_async=None) -> None:
+    def __init__(self, engine: Optional[BaseExecutionBackend] = None,
+                 dry_run: bool = False, jupyter_async=None) -> None:
+
         self.loop = None
         self.running = []
         self.components = {}
         self.engine = engine
         self.resolved = set()
         self.dependencies = {}
+        self.dry_run = dry_run
         self.unresolved = set()
         self.queue = asyncio.Queue()
-        self.task_manager = self.engine.task_manager
+
+        if self.engine is None:
+            if self.dry_run:
+                self.engine = NoopExecutionBackend()
+            else:
+                raise RuntimeError('An execution backend must be specified'
+                                   ' when not in "dry_run" mode.')
+        else:
+            if self.dry_run and not isinstance(self.engine, NoopExecutionBackend):
+                raise RuntimeError('Dry-run only supports the "NoopExecutionBackend".')
 
         self.jupyter_async = jupyter_async if jupyter_async is not None else \
                              os.environ.get('FLOW_JUPYTER_ASYNC', None)
 
+        self.task_manager = self.engine.task_manager
         self._set_loop() # detect and set the event-loop 
         self._start_async_tasks() # start the solver and submitter
 
@@ -257,7 +268,7 @@ class WorkflowEngine:
             try:
                 return func(self, *args, **kwargs)
             except Exception as e:
-                logging.exception('Internal failure is detected, shutting down the resource engine')
+                logging.exception('Internal failure is detected, shutting down the execution backend')
                 self.engine.shutdown()  # Call shutdown on exception
                 raise e
         return wrapper

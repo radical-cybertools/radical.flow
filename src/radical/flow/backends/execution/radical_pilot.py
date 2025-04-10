@@ -54,10 +54,10 @@ class RadicalExecutionEngine(BaseExecutionBackend):
             self.resource_pilot = self.pilot_manager.submit_pilots(rp.PilotDescription(resources))
             self.task_manager.add_pilots(self.resource_pilot)
 
-            print('Resource Engine started successfully\n')
+            print('RadicalPilot execution backend started successfully\n')
 
         except Exception:
-            print('Resource Engine Failed to start, terminating\n')
+            print('RadicalPilot execution backend Failed to start, terminating\n')
             raise
 
         except (KeyboardInterrupt, SystemExit) as e:

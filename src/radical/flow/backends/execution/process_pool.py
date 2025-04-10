@@ -6,7 +6,7 @@ import radical.utils as ru
 from typing import Dict, Callable
 from concurrent.futures import ProcessPoolExecutor, Future
 
-from .base import BaseExecutionBackend
+from .base import Session, BaseExecutionBackend
 
 # Needs to be re-imported if using multiprocessing
 def _task_wrapper(task):
@@ -28,6 +28,7 @@ class ProcessExecutionBackend(BaseExecutionBackend):
     def __init__(self, resources: Dict):
         self._session = Session()
         self.task_manager = TaskManager()
+        print('ProcessPool execution backend started successfully')
 
     def state(self):
         pass
@@ -55,7 +56,3 @@ class TaskManager(ProcessPoolExecutor):
 
     def register_callback(self, func: Callable[[dict, str], None]):
         self._callback_func = func
-
-class Session():
-    def __init__(self):
-        self.path = os.getcwd()

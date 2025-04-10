@@ -5,7 +5,7 @@ import radical.utils as ru
 from typing import Dict, Callable
 from concurrent.futures import ThreadPoolExecutor, Future
 
-from .base import BaseExecutionBackend
+from .base import Session, BaseExecutionBackend
 
 
 class ThreadExecutionBackend(BaseExecutionBackend):
@@ -13,6 +13,7 @@ class ThreadExecutionBackend(BaseExecutionBackend):
     def __init__(self, resources: Dict):
         self._session = Session()
         self.task_manager = TaskManager()
+        print('ThreadPool execution backend started successfully')
 
     def state(self):
         pass
@@ -55,7 +56,3 @@ class TaskManager(ThreadPoolExecutor):
 
         state = 'DONE' if result.returncode == 0 else 'FAILED'
         return task, state
-
-class Session():
-    def __init__(self):
-        self.path = os.getcwd()
