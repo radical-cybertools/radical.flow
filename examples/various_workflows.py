@@ -1,6 +1,8 @@
-from radical.flow import WorkflowEngine, ResourceEngine, Task
+from radical.flow import Task
+from radical.flow import WorkflowEngine
+from radical.flow import RadicalExecutionEngine
 
-engine = ResourceEngine({'resource': 'local.localhost'})
+engine = RadicalExecutionEngine({'resource': 'local.localhost'})
 flow = WorkflowEngine(engine=engine)
 
 @flow

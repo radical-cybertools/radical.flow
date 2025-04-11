@@ -1,9 +1,11 @@
-from radical.flow import WorkflowEngine, ResourceEngine, Task
 import time
 
-engine = ResourceEngine({'resource': 'local.localhost'})
-flow = WorkflowEngine(engine=engine)
+from radical.flow import Task
+from radical.flow import WorkflowEngine
+from radical.flow import RadicalExecutionEngine
 
+engine = RadicalExecutionEngine({'resource': 'local.localhost'})
+flow = WorkflowEngine(engine=engine)
 
 @flow
 def task1(*args):
@@ -16,6 +18,7 @@ def task2(*args):
 
 @flow.block
 def block1(*args):
+    print(f'block1 started at {time.time()}')
     t1 = task1()
     t2 = task2(t1)
     t2.result()
@@ -23,6 +26,7 @@ def block1(*args):
 
 @flow.block
 def block2(*args):
+    print(f'block2 started at {time.time()}')
     t3 = task1()
     t4 = task2(t3)
     t4.result()

@@ -1,10 +1,13 @@
-import asyncio
-from radical.flow import WorkflowEngine, ResourceEngine, Task
 import time
+import asyncio
+
+from radical.flow import Task
+from radical.flow import WorkflowEngine
+from radical.flow import RadicalExecutionEngine
 
 async def main():
     # Create engine and workflow
-    engine = ResourceEngine({'resource': 'local.localhost'})
+    engine = RadicalExecutionEngine({'resource': 'local.localhost'})
     flow = WorkflowEngine(engine=engine)
 
     @flow
@@ -30,7 +33,7 @@ async def main():
 
     @flow.block
     async def block1(wf_id, *args):
-        print(f'\nStarting workflow {wf_id}')
+        print(f'Starting workflow {wf_id}')
         t1 = task1()
         tt = task1()
         t2 = task2(t1)

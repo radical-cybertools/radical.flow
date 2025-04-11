@@ -1,12 +1,15 @@
-import asyncio
-from radical.flow import WorkflowEngine, ResourceEngine, Task
 import time
+import asyncio
+
+from radical.flow import Task
+from radical.flow import WorkflowEngine
+from radical.flow import RadicalExecutionEngine
+
 
 async def main():
 
-    engine = ResourceEngine({'resource': 'local.localhost'})
+    engine = RadicalExecutionEngine({'resource': 'local.localhost'})
     flow = WorkflowEngine(engine=engine)
-
 
     @flow
     async def task1(*args):
@@ -53,7 +56,7 @@ async def main():
         await bob2
         print(f'Block of block-{i} is finished')
 
-    results = await asyncio.gather(*[run_block_of_blocks(i) for i in range(1024)])
+    results = await asyncio.gather(*[run_block_of_blocks(i) for i in range(2)])
 
     engine.shutdown()
 
