@@ -1,43 +1,82 @@
-from radical.flow import WorkflowEngine, ResourceEngine, Task
 import time
+import asyncio
 
-engine = ResourceEngine({'resource': 'local.localhost'})
-flow = WorkflowEngine(engine=engine)
+from radical.flow import Task
+from radical.flow import WorkflowEngine
+from radical.flow import RadicalExecutionEngine
+
+async def main():
+    # Create engine and workflow
+    engine = RadicalExecutionEngine({'resource': 'local.localhost'})
+    flow = WorkflowEngine(engine=engine)
+
+    @flow
+    async def task1(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
+
+    @flow
+    async def task2(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
+
+    @flow
+    async def task3(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
+
+    @flow
+    async def task4(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
+
+    @flow
+    async def task5(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
 
 
-@flow
-def task1(*args):
-    return Task(executable='/bin/echo "I got executed at" && /bin/date') 
+    @flow.block
+    async def block1(wf_id, *args):
+        print(f'Starting workflow {wf_id}')
+        t1 = task1()
+        tt = task1()
+        t2 = task2(t1)
+        t3 = task3(t1, t2)
+        t4 = task4(t3)
 
-@flow
-def task2(*args):
-    return Task(executable='/bin/echo "I got executed at" && /bin/date')
+        if await t4:
+            t5 = task5() 
+            await t5
 
-@flow.block
-def block1(*args):
-    t1 = task1()
-    t2 = task2(t1)
-    t2.result()
-    print(f'block1 done at {time.time()}')
+        return f'Workflow {wf_id} completed'
 
-@flow.block
-def block2(*args):
-    t3 = task1()
-    t4 = task2(t3)
-    t4.result()
-    print(f'block2 done at {time.time()}')
 
-@flow.as_async
-def run_blocks():
-    b1 = block1()
-    b2 = block2(b1)
-    b2.result()
+    @flow.block
+    async def block2(wf_id, *args):
+        print(f'\nStarting workflow {wf_id}')
+        t1 = task1()
+        t2 = task2(t1)
+        t3 = task3(t1, t2)
+        t4 = task4(t3)
 
-blocks = []
-for b in range(10000):
-    block = run_blocks()
-    blocks.append(block)
+        if await t4:
+            t5 = task5()
+            await t5
 
-[b.result() for b in blocks]
+        return f'Workflow {wf_id} completed'
 
-engine.shutdown()
+
+    async def run_blocks(wf_id):
+
+        b1 = block1(wf_id)
+        b2 = block2(wf_id, b1)
+        await b2
+        return "run blocks finished"
+
+
+    # Run workflows concurrently
+    results = await asyncio.gather(*[run_blocks(i) for i in range(1024)])
+
+    for result in results:
+        print(result)
+
+    engine.shutdown()
+
+if __name__ == '__main__':
+    asyncio.run(main())

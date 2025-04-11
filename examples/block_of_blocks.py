@@ -1,9 +1,12 @@
-from radical.flow import WorkflowEngine, ResourceEngine, Task
 import time
 
-engine = ResourceEngine({'resource': 'local.localhost'})
-flow = WorkflowEngine(engine=engine)
+from radical.flow import Task
+from radical.flow import WorkflowEngine
+from radical.flow import RadicalExecutionEngine
 
+
+engine = RadicalExecutionEngine({'resource': 'local.localhost'})
+flow = WorkflowEngine(engine=engine)
 
 @flow
 def task1(*args):

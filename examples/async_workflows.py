@@ -1,57 +1,55 @@
 import time
-from radical.flow import WorkflowEngine, ResourceEngine, Task
+import asyncio
 
+from radical.flow import Task
+from radical.flow import WorkflowEngine
+from radical.flow import RadicalExecutionEngine
 
-engine = ResourceEngine({'resource': 'local.localhost'})
-flow = WorkflowEngine(engine=engine)
+async def main():
+    # Create engine and workflow
+    engine = RadicalExecutionEngine({'resource': 'local.localhost'})
+    flow = WorkflowEngine(engine=engine)
 
-@flow
-def task1(*args):
-    return Task(executable='/bin/echo "I got executed at" && /bin/date') 
+    @flow
+    async def task1(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
 
-@flow
-def task2(*args):
-    return Task(executable='/bin/echo "I got executed at" && /bin/date')
+    @flow
+    async def task2(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
 
-@flow
-def task3(*args):
-    return Task(executable='/bin/echo "I got executed at" && /bin/date')
+    @flow
+    async def task3(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
 
-@flow
-def task4(*args):
-    return Task(executable='echo "$(( RANDOM % 100 ))"')
+    @flow
+    async def task4(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
 
-@flow
-def task5(*args):
-    return Task(executable='/bin/echo "I got executed at" && /bin/date')
+    @flow
+    async def task5(*args):
+        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
 
-@flow
-def task6(*args):
-    return Task(executable='/bin/echo "I got executed at" && /bin/date')
+    async def run_wf(wf_id):
+        print(f'\nStarting workflow {wf_id} at {time.time()}')
+        t1 = task1()
+        t2 = task2(t1)
+        t3 = task3(t1, t2)
+        t4 = task4(t3)
 
-workflows = []
+        if await t4:
+            t5 = task5() 
+            await t5
 
-@flow.as_async
-def run_wf(wf_id):
-    t1 = task1()
-    t2 = task2(t1) 
-    t3 = task3(t2, t1)
-    t4 = task4(t1, t3)
-    t4_res = t4.result() # <-- this is a blocking call yet the workflow is non-blocking
+        return f'Workflow {wf_id} completed at {time.time()}'
 
-    if eval(t4_res) % 2 == 0: # <-- this is decision making step
-        print('Got even number submitting task 5 instead of 6')
-        t5 = task5(t4, t2)
-    else:
-        print('Got odd number submitting task 6 instead of 5')
-        t6 = task6(t4, t2)
+    # Run workflows concurrently
+    results = await asyncio.gather(*[run_wf(i) for i in range(1024)])
 
-    return (f'I am workflow {wf_id} and I am done at {time.time()}')
+    for result in results:
+        print(result)
 
-# run 5 blocking workflows in parallel instead of sequentially
-for i in range(5):
-    workflows.append(run_wf(i))
+    engine.shutdown()
 
-print([wf.result() for wf in workflows])
-
-engine.shutdown()
+if __name__ == '__main__':
+    asyncio.run(main())

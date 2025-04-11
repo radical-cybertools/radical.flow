@@ -3,7 +3,9 @@ from typing import Dict
 import radical.utils as ru
 import radical.pilot as rp
 
-class ResourceEngine:
+from .base import BaseExecutionBackend
+
+class RadicalExecutionEngine(BaseExecutionBackend):
     """
     The ResourceEngine class is responsible for managing computing resources and creating
     sessions for executing tasks. It interfaces with a resource management framework to
@@ -52,10 +54,10 @@ class ResourceEngine:
             self.resource_pilot = self.pilot_manager.submit_pilots(rp.PilotDescription(resources))
             self.task_manager.add_pilots(self.resource_pilot)
 
-            print('Resource Engine started successfully\n')
+            print('RadicalPilot execution backend started successfully\n')
 
         except Exception:
-            print('Resource Engine Failed to start, terminating\n')
+            print('RadicalPilot execution backend Failed to start, terminating\n')
             raise
 
         except (KeyboardInterrupt, SystemExit) as e:
@@ -65,6 +67,9 @@ class ResourceEngine:
             # reason).
             excp_msg = f'Resource engine failed internally, please check {self._session.path}'
             raise SystemExit(excp_msg) from e
+
+    def submit_tasks(self, tasks):
+        return self.task_manager.submit_tasks(tasks)
 
     def state(self):
         """
