@@ -539,12 +539,12 @@ class WorkflowEngine:
         task_fut = self.components[task.uid]['future']
 
         if state == rp.DONE:
-            self.log.debug(f'{task.uid} is DONE')
+            self.log.info(f'{task.uid} is DONE')
             if not task_fut.done():
                 task_fut.set_result(task.stdout)
             self.running.remove(task.uid)
         elif state in [rp.FAILED, rp.CANCELED]:
-            self.log.debug(f'{task.uid} is FAILED')
+            self.log.info(f'{task.uid} is FAILED')
             if not task_fut.done():
                 task_fut.set_exception(Exception(task.stderr))
             self.running.remove(task.uid)
