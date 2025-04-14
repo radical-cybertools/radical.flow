@@ -11,7 +11,7 @@ from .base import Session, BaseExecutionBackend
 class ThreadExecutionBackend(BaseExecutionBackend):
     @typeguard.typechecked
     def __init__(self, resources: Dict):
-        self._session = Session()
+        self.session = Session()
         self.task_manager = TaskManager()
         print('ThreadPool execution backend started successfully')
 

@@ -47,10 +47,10 @@ class RadicalExecutionEngine(BaseExecutionBackend):
     @typeguard.typechecked
     def __init__(self, resources: Dict) -> None:
         try:
-            self._session = rp.Session(uid=ru.generate_id('flow.session',
+            self.session = rp.Session(uid=ru.generate_id('flow.session',
                                                           mode=ru.ID_PRIVATE))
-            self.task_manager = rp.TaskManager(self._session)
-            self.pilot_manager = rp.PilotManager(self._session)
+            self.task_manager = rp.TaskManager(self.session)
+            self.pilot_manager = rp.PilotManager(self.session)
             self.resource_pilot = self.pilot_manager.submit_pilots(rp.PilotDescription(resources))
             self.task_manager.add_pilots(self.resource_pilot)
 
@@ -65,7 +65,7 @@ class RadicalExecutionEngine(BaseExecutionBackend):
             # corresponding KeyboardInterrupt exception for shutdown.  We also catch
             # SystemExit (which gets raised if the main threads exits for some other
             # reason).
-            excp_msg = f'Resource engine failed internally, please check {self._session.path}'
+            excp_msg = f'Resource engine failed internally, please check {self.session.path}'
             raise SystemExit(excp_msg) from e
 
     def submit_tasks(self, tasks):
@@ -105,4 +105,4 @@ class RadicalExecutionEngine(BaseExecutionBackend):
             None
         """
         print('Shutdown is triggered, terminating the resources gracefully')
-        self._session.close(download=True)
+        self.session.close(download=True)
