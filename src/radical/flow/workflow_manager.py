@@ -31,7 +31,7 @@ class WorkflowEngine:
     data staging, and execution.
 
     Inputs:
-        engine (BaseExecutionBackend): The backend used for task management/execution.
+        backend (BaseExecutionBackend): The backend used for task management/execution.
         dry_run : Enable dry run execution mode with no computational resources.
         jupyter_async: enable the execution of async tasks within Jupyter.
     Methods:
@@ -75,20 +75,24 @@ class WorkflowEngine:
     """
 
     @typeguard.typechecked
-    def __init__(self, engine: Optional[BaseExecutionBackend] = None,
+    def __init__(self, backend: Optional[BaseExecutionBackend] = None,
                  dry_run: bool = False, jupyter_async=None) -> None:
 
         self.loop = None
         self.running = []
         self.components = {}
-        self.engine = engine
         self.resolved = set()
         self.dependencies = {}
+        self.backend = backend
         self.dry_run = dry_run
         self.unresolved = set()
         self.queue = asyncio.Queue()
-        self.work_dir = self.engine.session.path
-        self.task_manager = self.engine.task_manager
+        
+        self._setup_execution_backend()
+        self.task_manager = self.backend.task_manager
+        
+        # FIXME: session should always have a valid path
+        self.work_dir = self.backend.session.path or os.getcwd()
 
         # always set the logger and profiler **before** setting the async loop
         self.log = ru.Logger(name='workflow_manager',
@@ -98,21 +102,22 @@ class WorkflowEngine:
 
         self.task_manager.register_callback(self.task_callbacks)
 
-        if self.engine is None:
-            if self.dry_run:
-                self.engine = NoopExecutionBackend()
-            else:
-                raise RuntimeError('An execution backend must be specified'
-                                   ' when not in "dry_run" mode.')
-        else:
-            if self.dry_run and not isinstance(self.engine, NoopExecutionBackend):
-                raise RuntimeError('Dry-run only supports the "NoopExecutionBackend".')
-
         self.jupyter_async = jupyter_async if jupyter_async is not None else \
                              os.environ.get('FLOW_JUPYTER_ASYNC', None)
 
         self._set_loop() # detect and set the event-loop 
         self._start_async_tasks() # start the solver and submitter
+
+    def _setup_execution_backend(self):
+        if self.backend is None:
+            if self.dry_run:
+                self.backend = NoopExecutionBackend()
+            else:
+                raise RuntimeError('An execution backend must be specified'
+                                   ' when not in "dry_run" mode.')
+        else:
+            if self.dry_run and not isinstance(self.backend, NoopExecutionBackend):
+                raise RuntimeError('Dry-run only supports the "NoopExecutionBackend".')
 
     def _is_in_jupyter(self):
         return "JPY_PARENT_PID" in os.environ
@@ -270,7 +275,7 @@ class WorkflowEngine:
                 return func(self, *args, **kwargs)
             except Exception as e:
                 self.log.exception('Internal failure is detected, shutting down the execution backend')
-                self.engine.shutdown()  # Call shutdown on exception
+                self.backend.shutdown()  # Call shutdown on exception
                 raise e
         return wrapper
 
@@ -280,7 +285,7 @@ class WorkflowEngine:
 
         This method generates a custom flow component UID based on the format
         `task.%(item_counter)06d` and assigns it a session-specific namespace
-        using the engine session UID.
+        using the backend session UID.
 
         Returns:
             str: The generated unique identifier for the flow component.

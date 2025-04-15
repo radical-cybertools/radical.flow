@@ -1,11 +1,11 @@
 from radical.flow import Task
 from radical.flow import WorkflowEngine
-from radical.flow import RadicalExecutionEngine, DaskExecutionBackend
+from radical.flow import RadicalExecutionBackend, DaskExecutionBackend
 from radical.flow import ThreadExecutionBackend, ProcessExecutionBackend
 
 backends= {ThreadExecutionBackend: {},
            ProcessExecutionBackend: {},
-           RadicalExecutionEngine: {'resource': 'local.localhost'},
+           RadicalExecutionBackend: {'resource': 'local.localhost'},
            DaskExecutionBackend: {'n_workers': 2, 'threads_per_worker': 1}}
 
 
@@ -17,8 +17,8 @@ print("""
 
 def main():
     for backend, resource in backends.items():
-        engine = backend(resource)
-        flow = WorkflowEngine(engine=engine)
+        backend = backend(resource)
+        flow = WorkflowEngine(backend=backend)
 
         @flow
         def task1(*args):
@@ -36,7 +36,7 @@ def main():
 
         print(t3.result())
 
-        engine.shutdown()
+        backend.shutdown()
 
 if __name__ == "__main__":
     main()

@@ -3,13 +3,13 @@ import asyncio
 
 from radical.flow import Task
 from radical.flow import WorkflowEngine
-from radical.flow import RadicalExecutionEngine
+from radical.flow import RadicalExecutionBackend
 
 
 async def main():
 
-    engine = RadicalExecutionEngine({'resource': 'local.localhost'})
-    flow = WorkflowEngine(engine=engine)
+    backend = RadicalExecutionBackend({'resource': 'local.localhost'})
+    flow = WorkflowEngine(backend=backend)
 
     @flow
     async def task1(*args):
@@ -58,7 +58,7 @@ async def main():
 
     results = await asyncio.gather(*[run_block_of_blocks(i) for i in range(2)])
 
-    engine.shutdown()
+    backend.shutdown()
 
 
 if __name__ == '__main__':
