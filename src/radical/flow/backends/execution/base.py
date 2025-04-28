@@ -21,6 +21,10 @@ class BaseExecutionBackend(ABC):
     def task_state_cb(self, task: dict, state: str) -> None:
         pass
 
+    @abstractmethod
+    def get_nodelist(self) -> object:
+        pass
+
 
 class Session():
     def __init__(self):

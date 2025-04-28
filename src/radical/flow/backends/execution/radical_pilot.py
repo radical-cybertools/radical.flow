@@ -81,7 +81,20 @@ class RadicalExecutionEngine(BaseExecutionBackend):
         raise NotImplementedError
     
     def get_nodelist(self):
-        pass
+        """
+        Get the information about allocated nodes.
+
+        Returns:
+            `rp.NodeList` object, which holds the information about allocated
+            nodes, where each node from `nodelist.nodes` is of the type
+            `rp.NodeResource`.
+        """
+
+        nodelist = None
+        if self.resource_pilot.state == rp.PMGR_ACTIVE:
+            nodelist = self.resource_pilot.nodelist
+
+        return nodelist
 
     def task_state_cb(self, task, state):
         """
@@ -109,3 +122,4 @@ class RadicalExecutionEngine(BaseExecutionBackend):
         """
         print('Shutdown is triggered, terminating the resources gracefully')
         self._session.close(download=True)
+
