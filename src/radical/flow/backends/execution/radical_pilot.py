@@ -70,6 +70,9 @@ class RadicalExecutionEngine(BaseExecutionBackend):
 
     def submit_tasks(self, tasks):
         return self.task_manager.submit_tasks(tasks)
+    
+    def get_nodelist(self):
+        pass
 
     def state(self):
         """
