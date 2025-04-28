@@ -79,6 +79,9 @@ class RadicalExecutionEngine(BaseExecutionBackend):
             The current state of the resource pilot.
         """
         raise NotImplementedError
+    
+    def get_nodelist(self):
+        pass
 
     def task_state_cb(self, task, state):
         """
