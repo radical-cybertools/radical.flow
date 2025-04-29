@@ -1,3 +1,4 @@
+import copy
 import typeguard
 from typing import Dict
 import radical.utils as ru
@@ -133,6 +134,9 @@ class RadicalExecutionBackend(BaseExecutionBackend):
         while True:
             yield masters_uids[current_master]
             current_master = (current_master + 1) % len(self.masters)
+
+    def register_callback(self, func):
+        return self.task_manager.register_callback(func)
 
     def submit_tasks(self, tasks):
         if self.raptor_mode:
