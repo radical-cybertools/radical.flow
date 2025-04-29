@@ -1,9 +1,9 @@
 from radical.flow import Task
 from radical.flow import WorkflowEngine
-from radical.flow import RadicalExecutionEngine
+from radical.flow import RadicalExecutionBackend
 
-engine = RadicalExecutionEngine({'resource': 'local.localhost'})
-flow = WorkflowEngine(engine=engine)
+backend = RadicalExecutionBackend({'resource': 'local.localhost'})
+flow = WorkflowEngine(backend=backend)
 
 @flow
 def task1(*args):
@@ -86,4 +86,4 @@ for i in range(2):
 
 print([t.result() for t in res])
 
-engine.shutdown()
+backend.shutdown()

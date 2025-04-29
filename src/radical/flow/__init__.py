@@ -7,7 +7,7 @@ from radical.flow.backends.execution.noop import NoopExecutionBackend
 from radical.flow.backends.execution.thread_pool import ThreadExecutionBackend
 from radical.flow.backends.execution.process_pool import ProcessExecutionBackend
 from radical.flow.backends.execution.dask_parallel import DaskExecutionBackend
-from radical.flow.backends.execution.radical_pilot import RadicalExecutionEngine
+from radical.flow.backends.execution.radical_pilot import RadicalExecutionBackend
 
 
 # ------------------------------------------------------------------------------

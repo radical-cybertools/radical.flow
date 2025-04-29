@@ -12,7 +12,7 @@ from .base import Session, BaseExecutionBackend
 class DaskExecutionBackend(BaseExecutionBackend):
     @typeguard.typechecked
     def __init__(self, resources: Dict):
-        self._session = Session()
+        self.session = Session()
         self.task_manager = TaskManager(resources)
         print('Dask-Parallel execution backend started successfully')
 
