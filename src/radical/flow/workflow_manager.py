@@ -544,12 +544,19 @@ class WorkflowEngine:
         task_fut = self.components[task.uid]['future']
 
         if state == rp.DONE:
-            self.log.info(f'{task.uid} is DONE')
+            self.log.info(f'{task.uid} is {state}')
             if not task_fut.done():
                 task_fut.set_result(task.stdout)
             self.running.remove(task.uid)
         elif state in [rp.FAILED, rp.CANCELED]:
-            self.log.info(f'{task.uid} is FAILED')
+            self.log.info(f'{task.uid} is {state}')
             if not task_fut.done():
                 task_fut.set_exception(Exception(task.stderr))
+            self.running.remove(task.uid)
+        elif state == rp.SERVICE_ACTIVE:
+            # we resolve this task when it is in READY state
+            # as service task will never be in DONE state
+            self.log.info(f'{task.uid} is {state}')
+            if not task_fut.done():
+                task_fut.set_result(task.info)
             self.running.remove(task.uid)
