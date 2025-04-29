@@ -89,7 +89,6 @@ class WorkflowEngine:
         self.queue = asyncio.Queue()
         
         self._setup_execution_backend()
-        self.task_manager = self.backend.task_manager
         
         # FIXME: session should always have a valid path
         self.work_dir = self.backend.session.path or os.getcwd()
@@ -100,7 +99,7 @@ class WorkflowEngine:
         self.prof = ru.Profiler(name='workflow_manager',
                                 ns='radical.flow', path=self.work_dir)
 
-        self.task_manager.register_callback(self.task_callbacks)
+        self.backend.register_callback(self.task_callbacks)
 
         self.jupyter_async = jupyter_async if jupyter_async is not None else \
                              os.environ.get('FLOW_JUPYTER_ASYNC', None)
@@ -501,7 +500,7 @@ class WorkflowEngine:
                 self.log.debug(f'Submitting {[b.name for b in objects]} for execution')
 
                 if tasks:
-                    self.task_manager.submit_tasks(tasks)
+                    self.backend.submit_tasks(tasks)
                 if blocks:
                     await self._submit_blocks(blocks)
 
