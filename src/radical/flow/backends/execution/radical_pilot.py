@@ -125,4 +125,4 @@ class RadicalExecutionBackend(BaseExecutionBackend):
             None
         """
         print('Shutdown is triggered, terminating the resources gracefully')        
-        self._session.close(download=True)
+        self.session.close(download=True)
