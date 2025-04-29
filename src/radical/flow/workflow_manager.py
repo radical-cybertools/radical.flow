@@ -31,7 +31,7 @@ class WorkflowEngine:
     data staging, and execution.
 
     Inputs:
-        engine (BaseExecutionBackend): The backend used for task management/execution.
+        backend (BaseExecutionBackend): The backend used for task management/execution.
         dry_run : Enable dry run execution mode with no computational resources.
         jupyter_async: enable the execution of async tasks within Jupyter.
     Methods:
@@ -75,43 +75,49 @@ class WorkflowEngine:
     """
 
     @typeguard.typechecked
-    def __init__(self, engine: Optional[BaseExecutionBackend] = None,
+    def __init__(self, backend: Optional[BaseExecutionBackend] = None,
                  dry_run: bool = False, jupyter_async=None) -> None:
 
         self.loop = None
         self.running = []
         self.components = {}
-        self.engine = engine
         self.resolved = set()
         self.dependencies = {}
+        self.backend = backend
         self.dry_run = dry_run
         self.unresolved = set()
         self.queue = asyncio.Queue()
+        
+        self._setup_execution_backend()
+        self.task_manager = self.backend.task_manager
+        
+        # FIXME: session should always have a valid path
+        self.work_dir = self.backend.session.path or os.getcwd()
 
-        if self.engine is None:
-            if self.dry_run:
-                self.engine = NoopExecutionBackend()
-            else:
-                raise RuntimeError('An execution backend must be specified'
-                                   ' when not in "dry_run" mode.')
-        else:
-            if self.dry_run and not isinstance(self.engine, NoopExecutionBackend):
-                raise RuntimeError('Dry-run only supports the "NoopExecutionBackend".')
+        # always set the logger and profiler **before** setting the async loop
+        self.log = ru.Logger(name='workflow_manager',
+                             ns='radical.flow', path=self.work_dir)
+        self.prof = ru.Profiler(name='workflow_manager',
+                                ns='radical.flow', path=self.work_dir)
+
+        self.task_manager.register_callback(self.task_callbacks)
 
         self.jupyter_async = jupyter_async if jupyter_async is not None else \
                              os.environ.get('FLOW_JUPYTER_ASYNC', None)
 
-        self.task_manager = self.engine.task_manager
         self._set_loop() # detect and set the event-loop 
         self._start_async_tasks() # start the solver and submitter
 
-        self.task_manager.register_callback(self.task_callbacks)
-
-        self._profiler = ru.Profiler(name='workflow_manager',
-                                     ns='radical.flow', path=self.engine._session.path)
-
-        logging.basicConfig(filename=f'{self.engine._session.path}/workflow_manager.log',
-                            level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+    def _setup_execution_backend(self):
+        if self.backend is None:
+            if self.dry_run:
+                self.backend = NoopExecutionBackend()
+            else:
+                raise RuntimeError('An execution backend must be specified'
+                                   ' when not in "dry_run" mode.')
+        else:
+            if self.dry_run and not isinstance(self.backend, NoopExecutionBackend):
+                raise RuntimeError('Dry-run only supports the "NoopExecutionBackend".')
 
     def _is_in_jupyter(self):
         return "JPY_PARENT_PID" in os.environ
@@ -157,26 +163,26 @@ class WorkflowEngine:
                 if self.jupyter_async:
                     # Jupyter async context and runs **async** functions
                     self.loop = loop
-                    logging.debug('Running within Async Jupyter and loop is found/re-used')
+                    self.log.debug('Running within Async Jupyter and loop is found/re-used')
                 else:
                     # Jupyter async context and runs **sync** functions
                     self.loop = asyncio.new_event_loop()
-                    logging.debug('Running within Sync Jupyter and new loop is created')
+                    self.log.debug('Running within Sync Jupyter and new loop is created')
             else:
                 # IPython async context and runs **async/sync** functions
                 self.loop = loop
-                logging.debug('Running within IPython loop is found/re-used')
+                self.log.debug('Running within IPython loop is found/re-used')
 
         except RuntimeError:
             # Python sync context and runs **async/sync** functions
             self.loop = asyncio.new_event_loop()    # create a new loop if none exists
-            logging.debug('No loop was found, new loop is created/set')
+            self.log.debug('No loop was found, new loop is created/set')
 
         if not self.loop:
             raise RuntimeError('Failed to obtain or create a new event-loop for unknown reason')
 
         asyncio.set_event_loop(self.loop)
-        logging.debug('Event-Loop is set successfully')
+        self.log.debug('Event-Loop is set successfully')
 
     def _start_async_tasks(self):
         """Starts async tasks in both sync and async contexts."""
@@ -255,7 +261,7 @@ class WorkflowEngine:
 
         self.dependencies[comp_descriptions['uid']] = comp_deps
 
-        logging.debug(f"Registered {comp_type}: '{comp_descriptions['name']}' with id of {comp_descriptions['uid']}")
+        self.log.debug(f"Registered {comp_type}: '{comp_descriptions['name']}' with id of {comp_descriptions['uid']}")
 
         return comp_fut
 
@@ -268,8 +274,8 @@ class WorkflowEngine:
             try:
                 return func(self, *args, **kwargs)
             except Exception as e:
-                logging.exception('Internal failure is detected, shutting down the execution backend')
-                self.engine.shutdown()  # Call shutdown on exception
+                self.log.exception('Internal failure is detected, shutting down the execution backend')
+                self.backend.shutdown()  # Call shutdown on exception
                 raise e
         return wrapper
 
@@ -279,7 +285,7 @@ class WorkflowEngine:
 
         This method generates a custom flow component UID based on the format
         `task.%(item_counter)06d` and assigns it a session-specific namespace
-        using the engine session UID.
+        using the backend session UID.
 
         Returns:
             str: The generated unique identifier for the flow component.
@@ -472,7 +478,7 @@ class WorkflowEngine:
 
                     msg = f"Ready to submit: {comp_desc.name}"
                     msg += f" with resolved dependencies: {[dep['name'] for dep in dependencies]}"
-                    logging.debug(msg)
+                    self.log.debug(msg)
 
             if to_submit:
                 await self.queue.put(to_submit)
@@ -492,7 +498,7 @@ class WorkflowEngine:
                 tasks = [t for t in objects if t and BLOCK not in t['uid']]
                 blocks = [b for b in objects if b and TASK not in b['uid']]
 
-                logging.debug(f'Submitting {[b.name for b in objects]} for execution')
+                self.log.debug(f'Submitting {[b.name for b in objects]} for execution')
 
                 if tasks:
                     self.task_manager.submit_tasks(tasks)
@@ -502,7 +508,7 @@ class WorkflowEngine:
             except asyncio.TimeoutError:
                 await asyncio.sleep(0.5)
             except Exception as e:
-                logging.exception(f"Error in submit: {e}")
+                self.log.exception(f"Error in submit: {e}")
                 raise
 
     async def _submit_blocks(self, blocks: list):
@@ -538,12 +544,12 @@ class WorkflowEngine:
         task_fut = self.components[task.uid]['future']
 
         if state == rp.DONE:
-            logging.debug(f'{task.uid} is DONE')
+            self.log.info(f'{task.uid} is DONE')
             if not task_fut.done():
                 task_fut.set_result(task.stdout)
             self.running.remove(task.uid)
         elif state in [rp.FAILED, rp.CANCELED]:
-            logging.debug(f'{task.uid} is FAILED')
+            self.log.info(f'{task.uid} is FAILED')
             if not task_fut.done():
                 task_fut.set_exception(Exception(task.stderr))
             self.running.remove(task.uid)

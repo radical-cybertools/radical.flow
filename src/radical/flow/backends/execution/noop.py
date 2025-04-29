@@ -6,7 +6,7 @@ from .base import Session, BaseExecutionBackend
 
 class NoopExecutionBackend(BaseExecutionBackend):
     def __init__(self):
-        self._session = Session()
+        self.session = Session()
         self.task_manager = TaskManager()
         print('Noop execution backend started successfully')
 

@@ -2,10 +2,10 @@ import time
 
 from radical.flow import Task
 from radical.flow import WorkflowEngine
-from radical.flow import RadicalExecutionEngine
+from radical.flow import RadicalExecutionBackend
 
-engine = RadicalExecutionEngine({'resource': 'local.localhost'})
-flow = WorkflowEngine(engine=engine)
+backend = RadicalExecutionBackend({'resource': 'local.localhost'})
+flow = WorkflowEngine(backend=backend)
 
 @flow
 def task1(*args):
@@ -32,4 +32,4 @@ def run_wf(wf_id):
 for i in range(5):
     run_wf(i)
 
-engine.shutdown()
+backend.shutdown()

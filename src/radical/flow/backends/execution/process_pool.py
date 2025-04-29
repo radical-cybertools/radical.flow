@@ -26,7 +26,7 @@ def _task_wrapper(task):
 class ProcessExecutionBackend(BaseExecutionBackend):
     @typeguard.typechecked
     def __init__(self, resources: Dict):
-        self._session = Session()
+        self.session = Session()
         self.task_manager = TaskManager()
         print('ProcessPool execution backend started successfully')
 

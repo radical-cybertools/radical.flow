@@ -2,10 +2,10 @@ import time
 
 from radical.flow import Task
 from radical.flow import WorkflowEngine
-from radical.flow import RadicalExecutionEngine
+from radical.flow import RadicalExecutionBackend
 
-engine = RadicalExecutionEngine({'resource': 'local.localhost'})
-flow = WorkflowEngine(engine=engine)
+backend = RadicalExecutionBackend({'resource': 'local.localhost'})
+flow = WorkflowEngine(backend=backend)
 
 @flow
 def task1(*args):
@@ -38,4 +38,4 @@ b2 = block2(b1)
 
 b2.result()
 
-engine.shutdown()
+backend.shutdown()
