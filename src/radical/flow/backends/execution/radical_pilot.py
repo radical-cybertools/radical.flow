@@ -47,7 +47,7 @@ class RadicalExecutionBackend(BaseExecutionBackend):
     """
 
     @typeguard.typechecked
-    def __init__(self, resources: Dict) -> None:
+    def __init__(self, resources: Dict, raptor_mode=False, raptor_config={}) -> None:
         try:
             self.session = rp.Session(uid=ru.generate_id('flow.session',
                                                           mode=ru.ID_PRIVATE))
@@ -55,6 +55,14 @@ class RadicalExecutionBackend(BaseExecutionBackend):
             self.pilot_manager = rp.PilotManager(self.session)
             self.resource_pilot = self.pilot_manager.submit_pilots(rp.PilotDescription(resources))
             self.task_manager.add_pilots(self.resource_pilot)
+
+            if raptor_mode:
+                self.raptor_mode = True
+                print('Enabling Raptor mode for RadicalExecutionBackend')
+                if raptor_config:
+                    self.setup_raptor_mode(raptor_config)
+                else:
+                    raise RuntimeError('"raptor_config" is required for RAPTOR mode')
 
             print('RadicalPilot execution backend started successfully\n')
 
@@ -72,7 +80,64 @@ class RadicalExecutionBackend(BaseExecutionBackend):
             
             raise SystemExit(exception_msg) from e
 
+    def setup_raptor_mode(self, raptor_config):
+        """
+        raptor_config = {
+            'masters': [
+                {
+                    'executable': '/bin/bash',
+                    'arguments': ['-c', 'echo Master running'],
+                    'cpu_processes': 1,
+                    'workers': [{'executable': '/bin/bash',
+                                 'arguments': ['-c', 'echo Worker running'],
+                                 'cpu_processes': 1},
+                                {'executable': '/bin/bash',
+                                 'arguments': ['-c', 'echo Another worker running'],
+                                 'cpu_processes': 1,}]}]}
+        """
+
+        self.masters = []
+        self.workers = []
+        self.master_selector = self.select_master()
+
+        cfg = copy.copy(raptor_config)
+        masters = cfg['masters']
+
+        for master_description in masters:
+            workers = master_description['workers']
+            master_description.pop('workers')
+
+            md = rp.TaskDescription(master_description)
+            md.uid = ru.generate_id('flow.master.%(item_counter)06d', ru.ID_CUSTOM,
+                                     ns=self.session.uid)
+            md.mode = rp.RAPTOR_MASTER
+            master = self.resource_pilot.submit_raptors(md)[0]
+            self.masters.append(master)
+
+            for worker_description in workers:
+                wd = rp.TaskDescription(worker_description)
+                wd.uid = ru.generate_id('flow.worker.%(item_counter)06d', ru.ID_CUSTOM,
+                                        ns=self.session.uid)
+                wd.raptor_id = md.uid
+                wd.mode = rp.RAPTOR_WORKER
+                worker = master.submit_workers(wd)
+                self.workers.append(worker)
+
+    def select_master(self):
+        """
+        Balance tasks submission across N masters and N workers
+        """
+        current_master = 0
+        masters_uids = [m.uid for m in self.masters]
+
+        while True:
+            yield masters_uids[current_master]
+            current_master = (current_master + 1) % len(self.masters)
+
     def submit_tasks(self, tasks):
+        if self.raptor_mode:
+            for t in tasks:
+                t.raptor_id = next(self.master_selector)
         return self.task_manager.submit_tasks(tasks)
 
     def state(self):

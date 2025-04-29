@@ -541,6 +541,10 @@ class WorkflowEngine:
         """
         Callback function to handle task state changes using asyncio.Future.
         """
+        if task.uid not in self.components:
+            self.log.warning(f'Received  unknow task and will skip it: {task.uid}')
+            return
+
         task_fut = self.components[task.uid]['future']
 
         if state == rp.DONE:
