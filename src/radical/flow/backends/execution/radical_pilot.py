@@ -1,6 +1,6 @@
 import copy
 import typeguard
-from typing import Dict
+from typing import Dict, Optional
 import radical.utils as ru
 import radical.pilot as rp
 
@@ -48,7 +48,8 @@ class RadicalExecutionBackend(BaseExecutionBackend):
     """
 
     @typeguard.typechecked
-    def __init__(self, resources: Dict, raptor_mode=False, raptor_config={}) -> None:
+    def __init__(self, resources: Dict, raptor_mode: bool = False, raptor_config: Optional[Dict] = None) -> None:
+        raptor_config = raptor_config or {}
         try:
             self.session = rp.Session(uid=ru.generate_id('flow.session',
                                                           mode=ru.ID_PRIVATE))
@@ -83,25 +84,54 @@ class RadicalExecutionBackend(BaseExecutionBackend):
 
     def setup_raptor_mode(self, raptor_config):
         """
-        raptor_config = {
-            'masters': [
-                {
-                    'executable': '/bin/bash',
-                    'arguments': ['-c', 'echo Master running'],
-                    'cpu_processes': 1,
-                    'workers': [{'executable': '/bin/bash',
-                                 'arguments': ['-c', 'echo Worker running'],
-                                 'cpu_processes': 1},
-                                {'executable': '/bin/bash',
-                                 'arguments': ['-c', 'echo Another worker running'],
-                                 'cpu_processes': 1,}]}]}
+        Sets up the Raptor mode by configuring and submitting master and worker tasks.
+
+        This method initializes the Raptor mode by creating and submitting master tasks
+        and their associated worker tasks to the resource pilot. The configuration for
+        the masters and workers is provided through the `raptor_config` dictionary.
+
+        Args:
+            raptor_config (dict): A dictionary containing the configuration for the
+                Raptor mode. The structure of the dictionary is as follows:
+                            'executable': str,  # Path to the master executable
+                            'arguments': list,  # List of arguments for the master
+                            'cpu_processes': int,  # Number of CPU processes for the master
+                            'workers': [  # List of worker configurations
+                                    'executable': str,  # Path to the worker executable
+                                    'arguments': list,  # List of arguments for the worker
+                                    'cpu_processes': int  # Number of CPU processes for the worker
+                                },
+                                ...
+                            ]
+                        },
+                        ...
+                    ]
+                }
+
+        Attributes:
+            masters (list): A list of master tasks created and submitted.
+            workers (list): A list of worker tasks created and submitted.
+            master_selector (callable): A callable used to select a master.
+
+        Steps:
+            1. Deep copies the `raptor_config` to avoid modifying the original.
+            2. Iterates through the master configurations in `raptor_config['masters']`.
+            3. Extracts and removes the worker configurations from each master configuration.
+            4. Creates and submits a master task using the `rp.TaskDescription`.
+            5. Iterates through the worker configurations and creates worker tasks
+               associated with the corresponding master.
+            6. Submits the worker tasks to the master and stores them in the `workers` list.
+
+        Raises:
+            Any exceptions raised by the `rp.TaskDescription` or submission methods
+            will propagate to the caller.
         """
 
         self.masters = []
         self.workers = []
         self.master_selector = self.select_master()
 
-        cfg = copy.copy(raptor_config)
+        cfg = copy.deepcopy(raptor_config)
         masters = cfg['masters']
 
         for master_description in masters:
@@ -128,6 +158,9 @@ class RadicalExecutionBackend(BaseExecutionBackend):
         """
         Balance tasks submission across N masters and N workers
         """
+        if not self.raptor_mode or not self.masters:
+            raise RuntimeError('Raptor mode is not enabled or no masters available')
+
         current_master = 0
         masters_uids = [m.uid for m in self.masters]
 
