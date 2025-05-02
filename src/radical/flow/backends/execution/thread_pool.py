@@ -21,6 +21,9 @@ class ThreadExecutionBackend(BaseExecutionBackend):
     def task_state_cb(self):
         pass
 
+    def register_callback(self, func: Callable):
+        self.task_manager.register_callback(func)
+
     def submit_tasks(self, tasks):
         return self.task_manager.submit_tasks(tasks)
 
