@@ -37,8 +37,8 @@ class RadicalExecutionBackend(BaseExecutionBackend):
 
     Raises:
         Exception: If session creation, pilot submission, or task manager setup fails,
-            the RadicalExecutionBackend will raise an exception, ensuring the resources are correctly
-            allocated and managed.
+            the RadicalExecutionBackend will raise an exception, ensuring the resources
+            are correctly allocated and managed.
 
     Example:
         ```python
@@ -48,7 +48,25 @@ class RadicalExecutionBackend(BaseExecutionBackend):
     """
 
     @typeguard.typechecked
-    def __init__(self, resources: Dict, raptor_mode: bool = False, raptor_config: Optional[Dict] = None) -> None:
+    def __init__(self, resources: Dict, raptor_config: Optional[Dict] = None) -> None:
+        """
+        Initialize the RadicalExecutionBackend with the given resources and optional
+        Raptor configuration.
+        Args:
+            resources (Dict): A dictionary specifying the resource configuration
+                for the Radical Pilot session.
+            raptor_config (Optional[Dict]): An optional dictionary containing
+                configuration for enabling Raptor mode. Defaults to None.
+        Raises:
+            Exception: If the RadicalPilot execution backend fails to start.
+            SystemExit: If a KeyboardInterrupt or SystemExit is encountered during
+                initialization, providing a message with the session path for debugging.
+        Notes:
+            - Initializes a Radical Pilot session, task manager, and pilot manager.
+            - Submits pilots based on the provided resource configuration.
+            - Adds the pilots to the task manager.
+            - Enables Raptor mode if a configuration is provided.
+        """
         raptor_config = raptor_config or {}
         try:
             self.session = rp.Session(uid=ru.generate_id('flow.session',
@@ -58,13 +76,10 @@ class RadicalExecutionBackend(BaseExecutionBackend):
             self.resource_pilot = self.pilot_manager.submit_pilots(rp.PilotDescription(resources))
             self.task_manager.add_pilots(self.resource_pilot)
 
-            if raptor_mode:
+            if raptor_config:
                 self.raptor_mode = True
                 print('Enabling Raptor mode for RadicalExecutionBackend')
-                if raptor_config:
-                    self.setup_raptor_mode(raptor_config)
-                else:
-                    raise RuntimeError('"raptor_config" is required for RAPTOR mode')
+                self.setup_raptor_mode(raptor_config)
 
             print('RadicalPilot execution backend started successfully\n')
 
@@ -95,11 +110,11 @@ class RadicalExecutionBackend(BaseExecutionBackend):
                 Raptor mode. The structure of the dictionary is as follows:
                             'executable': str,  # Path to the master executable
                             'arguments': list,  # List of arguments for the master
-                            'cpu_processes': int,  # Number of CPU processes for the master
+                            'ranks': int,  # Number of ranks (CPU processes) for the master
                             'workers': [  # List of worker configurations
                                     'executable': str,  # Path to the worker executable
                                     'arguments': list,  # List of arguments for the worker
-                                    'cpu_processes': int  # Number of CPU processes for the worker
+                                    'ranks': int  # Number of ranks (CPU processes) for the worker
                                 },
                                 ...
                             ]
@@ -135,8 +150,7 @@ class RadicalExecutionBackend(BaseExecutionBackend):
         masters = cfg['masters']
 
         for master_description in masters:
-            workers = master_description['workers']
-            master_description.pop('workers')
+            workers = master_description.pop('workers')
 
             md = rp.TaskDescription(master_description)
             md.uid = ru.generate_id('flow.master.%(item_counter)06d', ru.ID_CUSTOM,
