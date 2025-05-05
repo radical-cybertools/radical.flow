@@ -21,6 +21,10 @@ class BaseExecutionBackend(ABC):
     def task_state_cb(self, task: dict, state: str) -> None:
         pass
 
+    @abstractmethod
+    def register_callback(cls, func) -> None:
+        pass
+
 
 class Session():
     def __init__(self):
