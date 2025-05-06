@@ -472,7 +472,7 @@ class WorkflowEngine:
                                                  'target': f"task:///{input_file}",
                                                  'action': rp.TRANSFER})
 
-                    comp_desc.pre_exec = pre_exec
+                    comp_desc.pre_exec.extend(pre_exec)
                     comp_desc.input_staging = input_staging
                     to_submit.append(comp_desc)
 
