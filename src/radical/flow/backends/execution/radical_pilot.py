@@ -69,6 +69,7 @@ class RadicalExecutionBackend(BaseExecutionBackend):
         """
         raptor_config = raptor_config or {}
         try:
+            self.raptor_mode = False
             self.session = rp.Session(uid=ru.generate_id('flow.session',
                                                           mode=ru.ID_PRIVATE))
             self.task_manager = rp.TaskManager(self.session)
