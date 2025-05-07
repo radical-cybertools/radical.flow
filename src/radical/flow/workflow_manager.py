@@ -511,6 +511,30 @@ class WorkflowEngine:
         except Exception as e:
             if not block_fut.done():
                 block_fut.set_exception(e)
+    
+    def handle_task_success(self, task, task_fut):
+        """
+        Handle task success by setting the result in the future.
+        """
+        internal_task = self.components[task['uid']]['description']
+
+        if internal_task[FUNCTION]:
+            task_fut.set_result(task['return_value'])
+        else:
+            task_fut.set_result(task['stdout'])
+
+
+    def handle_task_failure(self, task, task_fut):
+        """
+        Handle task failure by setting the exception in the future.
+        """
+        internal_task = self.components[task['uid']]['description']
+
+        if internal_task[FUNCTION]:
+            task_fut.set_exception(Exception(task['exception']))
+        else:
+            task_fut.set_exception(Exception(task['stderr']))
+
 
     def task_callbacks(self, task, state):
         """
@@ -521,18 +545,18 @@ class WorkflowEngine:
             task = task.as_dict()
 
         if task['uid'] not in self.components:
-            self.log.warning(f'Received an unknown task and will skip it: {task['uid']}')
+            self.log.warning(f'Received an unknown task and will skip it: {task["uid"]}')
             return
 
         task_fut = self.components[task['uid']]['future']
 
         if state == DONE:
-            self.log.info(f'{task['uid']} is DONE')
+            self.log.info(f'{task['uid']} is {state}')
             if not task_fut.done():
-                task_fut.set_result(task['stdout'])
+                self.handle_task_success(task, task_fut)
             self.running.remove(task['uid'])
         elif state in [FAILED, CANCELED]:
-            self.log.info(f'{task['uid']} is FAILED')
+            self.log.info(f'{task['uid']} is {state}')
             if not task_fut.done():
-                task_fut.set_exception(Exception(task['stderr']))
+                self.handle_task_failure(task, task_fut)
             self.running.remove(task['uid'])
