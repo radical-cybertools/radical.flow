@@ -6,7 +6,6 @@ import threading
 from typing import Callable, Dict, Optional
 
 import radical.utils as ru
-import radical.pilot as rp
 
 from functools import wraps
 from asyncio import Future as AsyncFuture
@@ -22,6 +21,11 @@ TASK = 'task'
 BLOCK = 'block'
 FUNCTION = 'function'
 EXECUTABLE = 'executable'
+
+# Task States
+DONE = 'DONE'
+FAILED = 'FAILED'
+CANCELED = 'CANCELED'
 
 
 class WorkflowEngine:
@@ -524,12 +528,12 @@ class WorkflowEngine:
 
         task_fut = self.components[task['uid']]['future']
 
-        if state == rp.DONE:
+        if state == DONE:
             self.log.info(f'{task['uid']} is DONE')
             if not task_fut.done():
                 task_fut.set_result(task['stdout'])
             self.running.remove(task['uid'])
-        elif state in [rp.FAILED, rp.CANCELED]:
+        elif state in [FAILED, CANCELED]:
             self.log.info(f'{task['uid']} is FAILED')
             if not task_fut.done():
                 task_fut.set_exception(Exception(task['stderr']))
