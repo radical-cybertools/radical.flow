@@ -186,10 +186,11 @@ class RadicalExecutionBackend(BaseExecutionBackend):
 
     def register_callback(self, func):
         return self.task_manager.register_callback(func)
-    
+
     def register_task(self, uid, task_desc, rp_specific_kwargs):
 
         rp_task = rp.TaskDescription(from_dict=rp_specific_kwargs)
+        rp_task.uid = uid
         if task_desc['executable']:
             rp_task.executable = task_desc['executable']
         elif task_desc['function']:
@@ -252,7 +253,7 @@ class RadicalExecutionBackend(BaseExecutionBackend):
         Returns:
             list: A list of shell commands to link implicit data dependencies between tasks.
         """
-        task = self.tasks[task_id]
+        task = self.tasks[src_task['uid']]
         cmd1 = f'export SRC_TASK_ID={src_task['uid']}'
         cmd2 = f'export SRC_TASK_SANDBOX="$RP_PILOT_SANDBOX/$SRC_TASK_ID"'
 
@@ -266,12 +267,12 @@ class RadicalExecutionBackend(BaseExecutionBackend):
 
         task.pre_exec.extend(commands)
 
-    def submit_tasks(self, tasks):
-        print(tasks)
+    def submit_tasks(self, task_uids: list):
+        # get the task descriptions for each task uid
+        tasks = [self.tasks[uid] for uid in task_uids]
         if self.raptor_mode:
             for t in tasks:
                 if t.function:
-                    
                     t.function = rp.PythonTask(t.function, t.args, t.kwargs)
                 t.raptor_id = next(self.master_selector)
         return self.task_manager.submit_tasks(tasks)

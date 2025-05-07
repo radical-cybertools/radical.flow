@@ -259,12 +259,15 @@ class WorkflowEngine:
         """
         Shared task/block registration logic.
         """
-
         # make sure not to specify both func and executable at the same time
         comp_desc['name'] = comp_desc['function'].__name__
         comp_desc['uid'] = self._assign_uid(prefix=comp_type)
 
-        comp_desc['function'] = None if task_type == EXECUTABLE else comp_desc['function']
+        comp_desc[FUNCTION] = None if task_type == EXECUTABLE else comp_desc[FUNCTION]
+        
+        if comp_desc[EXECUTABLE] and not isinstance(comp_desc[EXECUTABLE], str):
+            error_msg = f"Executable task must return a string, got {type(comp_desc[EXECUTABLE])}"
+            raise ValueError(error_msg)
 
         comp_deps, input_files_deps, output_files_deps = self._detect_dependencies(comp_desc['args'])
 
@@ -464,7 +467,8 @@ class WorkflowEngine:
             try:
                 objects = await asyncio.wait_for(self.queue.get(), timeout=1)
 
-                tasks = [t for t in objects if t and BLOCK not in t['uid']]
+                # pass only the id of the resolved tasks to the backend
+                tasks = [t['uid'] for t in objects if t and BLOCK not in t['uid']]
                 blocks = [b for b in objects if b and TASK not in b['uid']]
 
                 self.log.debug(f'Submitting {[b['name'] for b in objects]} for execution')
@@ -510,6 +514,10 @@ class WorkflowEngine:
         """
         Callback function to handle task state changes using asyncio.Future.
         """
+        # we assume that the task object is a dictionary or a dict-like object
+        if not isinstance(task, dict):
+            task = task.as_dict()
+
         if task['uid'] not in self.components:
             self.log.warning(f'Received an unknown task and will skip it: {task['uid']}')
             return
