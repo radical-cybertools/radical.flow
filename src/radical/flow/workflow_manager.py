@@ -261,13 +261,12 @@ class WorkflowEngine:
         """
 
         # make sure not to specify both func and executable at the same time
-        com_desc['function'] = None if task_type == EXECUTABLE else comp_desc['function']
-
-        comp_desc['name'] = func_obj['func'].__name__
-
+        comp_desc['name'] = comp_desc['function'].__name__
         comp_desc['uid'] = self._assign_uid(prefix=comp_type)
 
-        comp_deps, input_files_deps, output_files_deps = self._detect_dependencies(func_obj['args'])
+        comp_desc['function'] = None if task_type == EXECUTABLE else comp_desc['function']
+
+        comp_deps, input_files_deps, output_files_deps = self._detect_dependencies(comp_desc['args'])
 
         comp_desc['metadata'] = {'dependencies': comp_deps,
                                  'input_files' : input_files_deps,
@@ -446,7 +445,7 @@ class WorkflowEngine:
 
                     to_submit.append(comp_desc)
 
-                    msg = f"Ready to submit: {comp_desc.name}"
+                    msg = f"Ready to submit: {comp_desc['name']}"
                     msg += f" with resolved dependencies: {[dep['name'] for dep in dependencies]}"
                     self.log.debug(msg)
 
@@ -511,19 +510,19 @@ class WorkflowEngine:
         """
         Callback function to handle task state changes using asyncio.Future.
         """
-        if task.uid not in self.components:
+        if task['uid'] not in self.components:
             self.log.warning(f'Received an unknown task and will skip it: {task['uid']}')
             return
 
-        task_fut = self.components[task.uid]['future']
+        task_fut = self.components[task['uid']]['future']
 
         if state == rp.DONE:
-            self.log.info(f'{task.uid} is DONE')
+            self.log.info(f'{task['uid']} is DONE')
             if not task_fut.done():
-                task_fut.set_result(task.stdout)
-            self.running.remove(task.uid)
+                task_fut.set_result(task['stdout'])
+            self.running.remove(task['uid'])
         elif state in [rp.FAILED, rp.CANCELED]:
-            self.log.info(f'{task.uid} is FAILED')
+            self.log.info(f'{task['uid']} is FAILED')
             if not task_fut.done():
-                task_fut.set_exception(Exception(task.stderr))
-            self.running.remove(task.uid)
+                task_fut.set_exception(Exception(task['stderr']))
+            self.running.remove(task['uid'])

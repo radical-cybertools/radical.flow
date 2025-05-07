@@ -21,6 +21,18 @@ class NoopExecutionBackend(BaseExecutionBackend):
 
     def submit_tasks(self, tasks):
         return self.task_manager.submit_tasks(tasks)
+    
+    def link_explicit_data_deps(self, task_id, file_name=None, file_path=None):
+        # No-op: No explicit data dependencies in the Noop backend
+        pass
+
+    def link_implicit_data_deps(self, task):
+        # No-op: No implicit data dependencies in the Noop backend
+        pass
+
+    def register_task(self, uid, task_desc, task_specific_kwargs):
+        # No-op: No task registration in the Noop backend
+        pass
 
     def shutdown(self) -> None:
         print('Dummy shutdown: Nothing to cleanup.')
