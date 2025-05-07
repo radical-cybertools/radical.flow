@@ -191,13 +191,22 @@ class RadicalExecutionBackend(BaseExecutionBackend):
 
         rp_task = rp.TaskDescription(from_dict=rp_specific_kwargs)
         rp_task.uid = uid
+
         if task_desc['executable']:
             rp_task.executable = task_desc['executable']
         elif task_desc['function']:
             rp_task.mode = rp.TASK_FUNCTION
-            rp_task.args = task_desc['args']
-            rp_task.kwargs = task_desc['kwargs']
-            rp_task.function = task_desc['function']
+            rp_task.function = rp.PythonTask(task_desc['function'],
+                                             task_desc['args'],
+                                             task_desc['kwargs'])    
+
+        if rp_task.mode in [rp.TASK_FUNCTION, rp.TASK_EVAL,
+                            rp.TASK_PROC, rp.TASK_METHOD]:
+            if not self.raptor_mode:
+                error_msg = f'Raptor mode is not enabled, cannot register {rp_task.mode}'
+                raise RuntimeError(error_msg)
+
+            rp_task.raptor_id = next(self.master_selector)
 
         self.tasks[uid] = rp_task
 
@@ -270,11 +279,6 @@ class RadicalExecutionBackend(BaseExecutionBackend):
     def submit_tasks(self, task_uids: list):
         # get the task descriptions for each task uid
         tasks = [self.tasks[uid] for uid in task_uids]
-        if self.raptor_mode:
-            for t in tasks:
-                if t.function:
-                    t.function = rp.PythonTask(t.function, t.args, t.kwargs)
-                t.raptor_id = next(self.master_selector)
         return self.task_manager.submit_tasks(tasks)
 
     def state(self):
