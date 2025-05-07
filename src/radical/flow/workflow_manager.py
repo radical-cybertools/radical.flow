@@ -36,49 +36,47 @@ class WorkflowEngine:
     support for async/await operations and handles task dependencies, input/output 
     data staging, and execution.
 
-    Inputs:
-        backend (BaseExecutionBackend): The backend used for task management/execution.
-        dry_run : Enable dry run execution mode with no computational resources.
-        jupyter_async: enable the execution of async tasks within Jupyter.
+        loop (asyncio.AbstractEventLoop): The asyncio event loop used for managing asynchronous tasks.
+        backend (BaseExecutionBackend): The execution backend used for task execution.
+        dry_run (bool): Indicates whether the engine is in dry-run mode.
+        work_dir (str): The working directory for the workflow session.
+        log (ru.Logger): Logger instance for logging workflow events.
+        prof (ru.Profiler): Profiler instance for profiling workflow execution.
+        jupyter_async (bool): Indicates whether the engine is running in Jupyter async mode.
     Methods:
-        __call__(func: Callable):
-            Decorator to register workflow tasks.
-        block(func: Callable):
-            Decorator to register workflow blocks.
+        __init__(backend, dry_run, jupyter_async):
+            Initializes the WorkflowEngine with the specified backend, dry-run mode, and Jupyter async mode.
+        _setup_execution_backend():
+            Configures the execution backend based on the provided backend and dry-run mode.
+        _is_in_jupyter():
+            Checks if the engine is running in a Jupyter environment.
+        _set_loop():
+            Configures and sets the asyncio event loop for the current context.
         _start_async_tasks():
-            Starts asynchronous tasks in both synchronous and asynchronous contexts.
-        shutdown_on_failure(func: Callable):
-            Decorator that calls `shutdown` if an exception occurs in the decorated function.
-        link_explicit_data_deps(task_id: str, file_name: Optional[str] = None) -> dict:
-            Creates a dictionary linking explicit data dependencies between tasks.
-        link_implicit_data_deps(src_task: Task) -> list:
-            Generates commands to link implicit data dependencies for a source task.
-        _detect_dependencies(possible_dependencies: list) -> tuple:
-            Detects and categorizes possible dependencies into blocks/tasks, input files,
-            and output files.
+            Starts asynchronous tasks for the workflow engine.
+        _register_decorator(comp_type, task_type=None):
+            Creates a decorator for registering tasks or blocks.
+        _handle_flow_component_registration(func, comp_type, task_type, task_kwargs):
+            Handles the registration of tasks or blocks as flow components.
+        _register_component(comp_fut, comp_type, comp_desc, task_type=None, task_kwargs=None):
+            Registers a task or block as a flow component.
+        shutdown_on_failure(func):
+            Decorator that shuts down the execution backend if an exception occurs in the decorated function.
+        _assign_uid(prefix):
+        _detect_dependencies(possible_dependencies):
+            Detects and categorizes dependencies into tasks, input files, and output files.
         _clear():
             Clears workflow components and their dependencies.
-        async run():
-            Manages the execution of workflow components by resolving dependencies and 
-            submitting them for execution once they are resolved.
-        async submit():
-            Submits blocks or tasks from the queue for execution.
-        async _submit_blocks(blocks: list):
-            Submits blocks for execution.
-        async execute_block(block_fut, func, *args, **kwargs):
-            Executes a block function and updates its asyncio future.
+        run():
+            Async method to manage the execution of workflow components by resolving dependencies and submitting them for execution.
+        submit():
+            Async method to submit blocks or tasks from the queue for execution.
+        _submit_blocks(blocks):
+            Async method to submit blocks for execution.
+        execute_block(block_fut, func, *args, **kwargs):
+            Async method to execute a block function and update its asyncio future.
         task_callbacks(task, state):
-            Callback function to handle task state changes using asyncio.Future.
-        _assign_uid(prefix: str) -> str:
-            Generates a unique identifier (UID) for a flow component.
-        _is_in_jupyter() -> bool:
-            Detects if the code is running in a Jupyter Notebook environment.
-        _set_loop():
-            Detects and sets the asyncio event loop based on the execution context.
-        _register_component(comp_fut, comp_type: str, func_obj: dict, comp_descriptions:
-            dict, is_async: bool):
-            Shared logic for registering tasks or blocks as workflow components.
-    """
+        """
 
     @typeguard.typechecked
     def __init__(self, backend: Optional[BaseExecutionBackend] = None,
