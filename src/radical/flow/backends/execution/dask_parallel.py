@@ -6,13 +6,6 @@ from dask.distributed import Client, Future as DaskFuture
 from concurrent.futures import Future as ConcurrentFuture
 from radical.flow.backends.execution.base import BaseExecutionBackend, Session
 
-def _setup_worker_event_loop():
-    """Initialize event loop on each worker."""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
 class DaskExecutionBackend(BaseExecutionBackend):
     """
@@ -28,10 +21,10 @@ class DaskExecutionBackend(BaseExecutionBackend):
         Args:
             resources: Dictionary of resource requirements for tasks
         """
+        self.tasks = {}
         self._client = None
+        self._callback = None
         self.session = Session()
-        self.tasks = {}  # Maps task UIDs to their futures
-        self._callback = None  # State change callback
         self.initialize(resources)
 
     def initialize(self, resources) -> None:
@@ -39,7 +32,7 @@ class DaskExecutionBackend(BaseExecutionBackend):
         try:
             self._client = Client(**resources)
             # Ensure workers can handle async functions
-            self._client.run(_setup_worker_event_loop)
+            #self._client.run(_setup_worker_event_loop)
             print(f"Dask backend initialized with dashboard at {self._client.dashboard_link}")
         except Exception as e:
             print(f"Failed to initialize Dask client: {str(e)}")
@@ -76,6 +69,9 @@ class DaskExecutionBackend(BaseExecutionBackend):
         """
         for task in tasks:
             self.tasks[task['uid']] = task
+            
+            # make sure we do not pass future object to Dask as it is not picklable
+            task['args'] = tuple(arg for arg in task['args'] if not isinstance(arg, ConcurrentFuture))
             try:
                 if task['async']:
                     self._submit_async_function(task)
@@ -87,47 +83,33 @@ class DaskExecutionBackend(BaseExecutionBackend):
                 print(f"Failed to submit task {task['uid']}: {str(e)}")
                 raise
 
-    def _submit_async_function(self, task: Dict[str, Any]) -> None:
-        """Submit async function to Dask properly without managing event loops."""
+    def _submit_to_dask(self, task: Dict[str, Any], fn: Callable, *args) -> None:
+        """Submit function to Dask and register completion callback."""
+        def on_done(f: DaskFuture):
+            try:
+                result = f.result()
+                task['return_value'] = result
+                self._callback(task, 'DONE')
+            except Exception as e:
+                task['exception'] = str(e)
+                self._callback(task, 'FAILED')
 
+        dask_future = self._client.submit(fn, *args, pure=False)
+        dask_future.add_done_callback(on_done)
+
+    def _submit_async_function(self, task: Dict[str, Any]) -> None:
+        """Submit async function to Dask."""
         async def async_wrapper():
             return await task['function'](*task['args'], **task['kwargs'])
 
-        # Submit the coroutine directly — Dask will await it correctly
-        dask_future = self._client.submit(async_wrapper, pure=False)
-
-        def on_dask_done(f: DaskFuture) -> None:
-            try:
-                result = f.result()
-                task['return_value'] = result
-                self._callback(task, 'DONE')
-            except Exception as e:
-                task['exception'] = str(e)
-                self._callback(task, 'FAILED')
-
-        dask_future.add_done_callback(on_dask_done)
-
+        self._submit_to_dask(task, async_wrapper)
 
     def _submit_sync_function(self, task: Dict[str, Any]) -> None:
-        """Submit async function to Dask properly without managing event loops."""
+        """Submit sync function to Dask."""
+        def sync_wrapper(fn, args, kwargs):
+            return fn(*args, **kwargs)
 
-        def sync_wrapper():
-            return task['function'](*task['args'], **task['kwargs'])
-
-        # Submit the coroutine directly — Dask will await it correctly
-        dask_future = self._client.submit(sync_wrapper, pure=False)
-
-        def on_dask_done(f: DaskFuture) -> None:
-            try:
-                result = f.result()
-                task['return_value'] = result
-                self._callback(task, 'DONE')
-            except Exception as e:
-                task['exception'] = str(e)
-                self._callback(task, 'FAILED')
-
-        dask_future.add_done_callback(on_dask_done)
-
+        self._submit_to_dask(task, sync_wrapper, task['function'], task['args'], task['kwargs'])
 
     def link_explicit_data_deps(self, source: str, target: str) -> Dict[str, str]:
         """Handle explicit data dependencies between tasks."""
