@@ -424,7 +424,10 @@ class WorkflowEngine:
                     continue
 
                 if comp_uid in self.running:
-                    continue
+                    if self.components[comp_uid]['future'].done():
+                        self.running.remove(comp_uid)
+                    else:
+                        continue
 
                 dependencies = self.dependencies[comp_uid]
                 if all(dep['uid'] in self.resolved and self.components[dep['uid']]['future'].done() for dep in dependencies):
@@ -555,9 +558,7 @@ class WorkflowEngine:
             self.log.info(f'{task['uid']} is {state}')
             if not task_fut.done():
                 self.handle_task_success(task, task_fut)
-            self.running.remove(task['uid'])
         elif state in [FAILED, CANCELED]:
             self.log.info(f'{task['uid']} is {state}')
             if not task_fut.done():
                 self.handle_task_failure(task, task_fut)
-            self.running.remove(task['uid'])

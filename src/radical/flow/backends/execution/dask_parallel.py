@@ -74,7 +74,8 @@ class DaskExecutionBackend(BaseExecutionBackend):
             self.tasks[task['uid']] = task
             
             # make sure we do not pass future object to Dask as it is not picklable
-            task['args'] = tuple(arg for arg in task['args'] if not isinstance(arg, ConcurrentFuture))
+            task['args'] = tuple(arg for arg in task['args'] if not isinstance(arg,
+                                               (ConcurrentFuture, asyncio.Future)))
 
             try:
                 if task['async']:
