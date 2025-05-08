@@ -26,7 +26,7 @@ class BaseExecutionBackend(ABC):
         pass
 
     @abstractmethod
-    def register_task(cls, task: dict) -> None:
+    def build_task(cls, task: dict) -> None:
         pass
     
     @abstractmethod

@@ -26,7 +26,7 @@ class ThreadExecutionBackend(BaseExecutionBackend):
     def register_callback(self, func: Callable):
         self._callback_func = func
 
-    def register_task(self, uid, task_desc, task_specific_kwargs):
+    def build_task(self, uid, task_desc, task_specific_kwargs):
         self.tasks[uid] = task_desc
     
     def link_explicit_data_deps(self, task_id, file_name=None):
@@ -60,8 +60,8 @@ class ThreadExecutionBackend(BaseExecutionBackend):
             exec_list = [task['executable']]
             exec_list.extend(task.get('arguments', []))
 
-            result = subprocess.run(exec_list, capture_output=True,
-                                    text=True, shell=True)
+            result = subprocess.run(exec_list, text=True,
+                                    capture_output=True, shell=True)
 
             task['stdout'] = result.stdout
             task['stderr'] = result.stderr
@@ -70,9 +70,8 @@ class ThreadExecutionBackend(BaseExecutionBackend):
 
         return task, state
 
-    def submit_tasks(self, task_uids: list):
-        for task_uid in task_uids:
-            task = self.tasks[task_uid]
+    def submit_tasks(self, tasks: list):
+        for task in tasks:
             # Submit task to thread pool
             fut = self.executor.submit(self._task_wrapper, task)
             fut.add_done_callback(lambda f, task=task: self._callback_func(*f.result()))

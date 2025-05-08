@@ -187,7 +187,7 @@ class RadicalExecutionBackend(BaseExecutionBackend):
     def register_callback(self, func):
         return self.task_manager.register_callback(func)
 
-    def register_task(self, uid, task_desc, rp_specific_kwargs):
+    def build_task(self, uid, task_desc, rp_specific_kwargs) -> rp.TaskDescription:
 
         rp_task = rp.TaskDescription(from_dict=rp_specific_kwargs)
         rp_task.uid = uid
@@ -210,6 +210,7 @@ class RadicalExecutionBackend(BaseExecutionBackend):
 
         self.tasks[uid] = rp_task
 
+        return rp_task
 
     def link_explicit_data_deps(self, task_id, file_name=None, file_path=None):
         """
@@ -276,10 +277,14 @@ class RadicalExecutionBackend(BaseExecutionBackend):
 
         task.pre_exec.extend(commands)
 
-    def submit_tasks(self, task_uids: list):
-        # get the task descriptions for each task uid
-        tasks = [self.tasks[uid] for uid in task_uids]
-        return self.task_manager.submit_tasks(tasks)
+    def submit_tasks(self, tasks: list):
+        
+        _tasks = []
+        for task in tasks:
+            _tasks.append(self.build_task(task['uid'],
+                          task, task['task_resource_kwargs']))
+
+        return self.task_manager.submit_tasks(_tasks)
 
     def state(self):
         """

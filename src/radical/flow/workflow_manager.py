@@ -56,9 +56,9 @@ class WorkflowEngine:
             Starts asynchronous tasks for the workflow engine.
         _register_decorator(comp_type, task_type=None):
             Creates a decorator for registering tasks or blocks.
-        _handle_flow_component_registration(func, comp_type, task_type, task_kwargs):
+        _handle_flow_component_registration(func, comp_type, task_type, task_resource_kwargs):
             Handles the registration of tasks or blocks as flow components.
-        _register_component(comp_fut, comp_type, comp_desc, task_type=None, task_kwargs=None):
+        _register_component(comp_fut, comp_type, comp_desc, task_type=None, task_resource_kwargs=None):
             Registers a task or block as a flow component.
         shutdown_on_failure(func):
             Decorator that shuts down the execution backend if an exception occurs in the decorated function.
@@ -206,12 +206,12 @@ class WorkflowEngine:
 
     @staticmethod
     def _register_decorator(comp_type: str, task_type: str = None):
-        def decorator(self, function: Optional[Callable] = None, **task_kwargs) -> Callable:
+        def decorator(self, function: Optional[Callable] = None, **task_resource_kwargs) -> Callable:
             def register(func: Callable) -> Callable:
                 return self._handle_flow_component_registration(func,
                                                                 comp_type=comp_type,
                                                                 task_type=task_type,
-                                                                task_kwargs=task_kwargs)
+                                                                task_resource_kwargs=task_resource_kwargs)
 
             if function is not None:
                 return register(function)
@@ -228,7 +228,7 @@ class WorkflowEngine:
                                             func: Callable,
                                             comp_type: str,
                                             task_type: str,
-                                            task_kwargs: dict = None):
+                                            task_resource_kwargs: dict = None):
         """Universal decorator logic for both tasks and blocks."""
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -238,26 +238,27 @@ class WorkflowEngine:
             comp_desc['args'] = args
             comp_desc['function'] = func
             comp_desc['kwargs'] = kwargs
+            comp_desc['task_resource_kwargs'] = task_resource_kwargs
 
             if is_async:
                 comp_fut = AsyncFuture()
                 async def async_wrapper():
                     # get the executable from the function call using await
                     comp_desc[EXECUTABLE] = await func(*args, **kwargs) if task_type == EXECUTABLE else None
-                    return self._register_component(comp_fut, comp_type, comp_desc, task_type, task_kwargs)
+                    return self._register_component(comp_fut, comp_type, comp_desc, task_type, task_resource_kwargs)
                 asyncio.create_task(async_wrapper())
                 return comp_fut
             else:
                 comp_fut = SyncFuture()
                 # get the executable from the function call
                 comp_desc[EXECUTABLE] = func(*args, **kwargs) if task_type == EXECUTABLE else None
-                self._register_component(comp_fut, comp_type, comp_desc, task_type, task_kwargs)
+                self._register_component(comp_fut, comp_type, comp_desc, task_type, task_resource_kwargs)
                 return comp_fut
 
         return wrapper
 
     def _register_component(self, comp_fut, comp_type: str,
-                            comp_desc: dict, task_type: str = None, task_kwargs: dict = None):
+                            comp_desc: dict, task_type: str = None, task_resource_kwargs: dict = None):
         """
         Shared task/block registration logic.
         """
@@ -281,12 +282,11 @@ class WorkflowEngine:
 
         setattr(comp_fut, comp_type, comp_desc)
 
+        # prepare the task package that will be sent to the backend
         self.components[comp_desc['uid']] = {'future': comp_fut,
                                              'description': comp_desc}
 
         self.dependencies[comp_desc['uid']] = comp_deps
-
-        self.backend.register_task(comp_desc['uid'], comp_desc, task_kwargs)
 
         self.log.debug(f"Registered {comp_type}: '{comp_desc['name']}' with id of {comp_desc['uid']}")
 
@@ -470,7 +470,7 @@ class WorkflowEngine:
                 objects = await asyncio.wait_for(self.queue.get(), timeout=1)
 
                 # pass only the id of the resolved tasks to the backend
-                tasks = [t['uid'] for t in objects if t and BLOCK not in t['uid']]
+                tasks = [t for t in objects if t and BLOCK not in t['uid']]
                 blocks = [b for b in objects if b and TASK not in b['uid']]
 
                 self.log.debug(f'Submitting {[b['name'] for b in objects]} for execution')
