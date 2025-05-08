@@ -1,4 +1,5 @@
 import os
+import asyncio
 import typeguard
 import subprocess
 import radical.utils as ru
@@ -35,38 +36,55 @@ class ThreadExecutionBackend(BaseExecutionBackend):
     def link_implicit_data_deps(self, src_task):
         pass
 
+    def run_async_func(self, coroutine_func):
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                # Run in a new event loop
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                return new_loop.run_until_complete(coroutine_func())
+            else:
+                return loop.run_until_complete(coroutine_func())
+        except RuntimeError:
+            # No event loop at all
+            return asyncio.run(coroutine_func())
+
     def _task_wrapper(self, task):
-        if task['function']:
-            try:
-                # Execute the function with optional args/kwargs
+        try:
+            if 'function' in task and task['function']:
                 func = task['function']
                 args = task.get('args', [])
                 kwargs = task.get('kwargs', {})
+                is_async = task.get('async', False)
 
-                return_value = func(*args, **kwargs)
+                if is_async:
+                    return_value = self.run_async_func(lambda: func(*args, **kwargs))
+                else:
+                    return_value = func(*args, **kwargs)
 
                 task['return_value'] = return_value
                 task['stdout'] = str(return_value)
-                task['stderr'] = ''
                 task['exit_code'] = 0
                 state = 'DONE'
-            except Exception as e:
-                task['return_value'] = None
-                task['stdout'] = ''
-                task['stderr'] = str(e)
-                task['exit_code'] = 1
-                state = 'FAILED'
-        else:
-            exec_list = [task['executable']]
-            exec_list.extend(task.get('arguments', []))
+            else:
+                exec_list = [task['executable']]
+                exec_list.extend(task.get('arguments', []))
 
-            result = subprocess.run(exec_list, text=True,
-                                    capture_output=True, shell=True)
+                result = subprocess.run(exec_list, text=True,
+                                        capture_output=True, shell=True)
 
-            task['stdout'] = result.stdout
-            task['stderr'] = result.stderr
-            task['exit_code'] = result.returncode
-            state = 'DONE' if result.returncode == 0 else 'FAILED'
+                task['stdout'] = result.stdout
+                task['stderr'] = result.stderr
+                task['exit_code'] = result.returncode
+                state = 'DONE' if result.returncode == 0 else 'FAILED'
+        except Exception as e:
+            task['return_value'] = None
+            task['stdout'] = ''
+            task['stderr'] = str(e)
+            task['exit_code'] = 1
+            task['exception'] = str(e)
+            state = 'FAILED'
 
         return task, state
 

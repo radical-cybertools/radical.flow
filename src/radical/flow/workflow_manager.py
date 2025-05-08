@@ -238,6 +238,7 @@ class WorkflowEngine:
             comp_desc['args'] = args
             comp_desc['function'] = func
             comp_desc['kwargs'] = kwargs
+            comp_desc['async'] = is_async
             comp_desc['task_resource_kwargs'] = task_resource_kwargs
 
             if is_async:
@@ -245,20 +246,20 @@ class WorkflowEngine:
                 async def async_wrapper():
                     # get the executable from the function call using await
                     comp_desc[EXECUTABLE] = await func(*args, **kwargs) if task_type == EXECUTABLE else None
-                    return self._register_component(comp_fut, comp_type, comp_desc, task_type, task_resource_kwargs)
+                    return self._register_component(comp_fut, comp_type, comp_desc, task_type)
                 asyncio.create_task(async_wrapper())
                 return comp_fut
             else:
                 comp_fut = SyncFuture()
                 # get the executable from the function call
                 comp_desc[EXECUTABLE] = func(*args, **kwargs) if task_type == EXECUTABLE else None
-                self._register_component(comp_fut, comp_type, comp_desc, task_type, task_resource_kwargs)
+                self._register_component(comp_fut, comp_type, comp_desc, task_type)
                 return comp_fut
 
         return wrapper
 
     def _register_component(self, comp_fut, comp_type: str,
-                            comp_desc: dict, task_type: str = None, task_resource_kwargs: dict = None):
+                            comp_desc: dict, task_type: str = None):
         """
         Shared task/block registration logic.
         """
@@ -351,7 +352,8 @@ class WorkflowEngine:
 
         for possible_dep in possible_dependencies:
             # it is a flow component deps
-            if isinstance(possible_dep, SyncFuture) or isinstance(possible_dep, AsyncFuture):
+            if isinstance(possible_dep, SyncFuture) or \
+                isinstance(possible_dep, AsyncFuture):
                 if hasattr(possible_dep, TASK):
                     possible_dep = possible_dep.task
                 elif hasattr(possible_dep, BLOCK):
@@ -511,7 +513,7 @@ class WorkflowEngine:
         except Exception as e:
             if not block_fut.done():
                 block_fut.set_exception(e)
-    
+
     def handle_task_success(self, task, task_fut):
         """
         Handle task success by setting the result in the future.
@@ -522,7 +524,6 @@ class WorkflowEngine:
             task_fut.set_result(task['return_value'])
         else:
             task_fut.set_result(task['stdout'])
-
 
     def handle_task_failure(self, task, task_fut):
         """
