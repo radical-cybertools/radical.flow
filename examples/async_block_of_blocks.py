@@ -11,13 +11,13 @@ async def main():
     backend = RadicalExecutionBackend({'resource': 'local.localhost'})
     flow = WorkflowEngine(backend=backend)
 
-    @flow
+    @flow.executable_task
     async def task1(*args):
-        return Task(executable='/bin/echo "I got executed at" && /bin/date') 
+        return '/bin/echo "I got executed at" && /bin/date'
 
-    @flow
+    @flow.executable_task
     async def task2(*args):
-        return Task(executable='/bin/echo "I got executed at" && /bin/date')
+        return '/bin/echo "I got executed at" && /bin/date'
 
 
     @flow.block

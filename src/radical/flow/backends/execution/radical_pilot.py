@@ -69,6 +69,7 @@ class RadicalExecutionBackend(BaseExecutionBackend):
         """
         raptor_config = raptor_config or {}
         try:
+            self.tasks = {}
             self.raptor_mode = False
             self.session = rp.Session(uid=ru.generate_id('flow.session',
                                                           mode=ru.ID_PRIVATE))
@@ -186,11 +187,104 @@ class RadicalExecutionBackend(BaseExecutionBackend):
     def register_callback(self, func):
         return self.task_manager.register_callback(func)
 
-    def submit_tasks(self, tasks):
-        if self.raptor_mode:
-            for t in tasks:
-                t.raptor_id = next(self.master_selector)
-        return self.task_manager.submit_tasks(tasks)
+    def build_task(self, uid, task_desc, rp_specific_kwargs) -> rp.TaskDescription:
+
+        rp_task = rp.TaskDescription(from_dict=rp_specific_kwargs)
+        rp_task.uid = uid
+
+        if task_desc['executable']:
+            rp_task.executable = task_desc['executable']
+        elif task_desc['function']:
+            rp_task.mode = rp.TASK_FUNCTION
+            rp_task.function = rp.PythonTask(task_desc['function'],
+                                             task_desc['args'],
+                                             task_desc['kwargs'])    
+
+        if rp_task.mode in [rp.TASK_FUNCTION, rp.TASK_EVAL,
+                            rp.TASK_PROC, rp.TASK_METHOD]:
+            if not self.raptor_mode:
+                error_msg = f'Raptor mode is not enabled, cannot register {rp_task.mode}'
+                raise RuntimeError(error_msg)
+
+            rp_task.raptor_id = next(self.master_selector)
+
+        self.tasks[uid] = rp_task
+
+        return rp_task
+
+    def link_explicit_data_deps(self, task_id, file_name=None, file_path=None):
+        """
+        Creates a dictionary linking explicit data dependencies between tasks.
+
+        This method defines the source and target for data transfer between tasks, 
+        using the provided task ID and optional file name. If no file name is provided, 
+        the task ID is used as the file name.
+
+        Args:
+            task_id (str): The task ID to link data dependencies from.
+            file_name (str, optional): The file name to be used in the data dependency. 
+                                        Defaults to None, in which case the task_id is used.
+
+        Returns:
+            dict: A dictionary containing the data dependencies, including source, 
+                target, and transfer action.
+        """
+        if not file_name and not file_path:
+            raise ValueError('Either file_name or file_path must be provided')
+
+        task = self.tasks[task_id]
+
+        if not file_name:
+            file_name = task_id
+
+        if file_name:
+            data_deps = {'source': f"pilot:///{task_id}/{file_name}",
+                        'target': f"task:///{file_name}", 'action': rp.LINK}
+
+        if file_path and file_name:
+            data_deps = {'source': file_path,
+                         'target': f"task:///{file_name}", 'action': rp.TRANSFER}
+
+        task.input_staging.append(data_deps)
+
+        return data_deps
+
+    def link_implicit_data_deps(self, src_task):
+        """
+        Generates commands to link implicit data dependencies for a source task.
+
+        This method creates shell commands to copy files from the source task's sandbox
+        to the current task's sandbox, excluding task-related files. The commands are 
+        returned as a list of Python shell commands to execute in the task environment.
+
+        Args:
+            src_task (Task): The source task whose files are to be copied.
+
+        Returns:
+            list: A list of shell commands to link implicit data dependencies between tasks.
+        """
+        task = self.tasks[src_task['uid']]
+        cmd1 = f'export SRC_TASK_ID={src_task['uid']}'
+        cmd2 = f'export SRC_TASK_SANDBOX="$RP_PILOT_SANDBOX/$SRC_TASK_ID"'
+
+        cmd3 = '''files=$(cd "$SRC_TASK_SANDBOX" && ls | grep -ve "^$SRC_TASK_ID")
+                  for f in $files
+                  do 
+                     ln -sf "$SRC_TASK_SANDBOX/$f" "$RP_TASK_SANDBOX"
+                  done'''
+
+        commands = [cmd1, cmd2, cmd3]
+
+        task.pre_exec.extend(commands)
+
+    def submit_tasks(self, tasks: list):
+        
+        _tasks = []
+        for task in tasks:
+            _tasks.append(self.build_task(task['uid'],
+                          task, task['task_resource_kwargs']))
+
+        return self.task_manager.submit_tasks(_tasks)
 
     def state(self):
         """

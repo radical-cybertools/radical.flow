@@ -6,14 +6,12 @@ import threading
 from typing import Callable, Dict, Optional
 
 import radical.utils as ru
-import radical.pilot as rp
 
 from functools import wraps
 from asyncio import Future as AsyncFuture
 from concurrent.futures import Future as SyncFuture
 
 import typeguard
-from .task import Task as Block
 from .data import InputFile, OutputFile
 
 from radical.flow.backends.execution.noop import NoopExecutionBackend
@@ -21,6 +19,14 @@ from radical.flow.backends.execution.base import BaseExecutionBackend
 
 TASK = 'task'
 BLOCK = 'block'
+FUNCTION = 'function'
+EXECUTABLE = 'executable'
+
+# Task States
+DONE = 'DONE'
+FAILED = 'FAILED'
+CANCELED = 'CANCELED'
+
 
 class WorkflowEngine:
     """
@@ -30,49 +36,47 @@ class WorkflowEngine:
     support for async/await operations and handles task dependencies, input/output 
     data staging, and execution.
 
-    Inputs:
-        backend (BaseExecutionBackend): The backend used for task management/execution.
-        dry_run : Enable dry run execution mode with no computational resources.
-        jupyter_async: enable the execution of async tasks within Jupyter.
+        loop (asyncio.AbstractEventLoop): The asyncio event loop used for managing asynchronous tasks.
+        backend (BaseExecutionBackend): The execution backend used for task execution.
+        dry_run (bool): Indicates whether the engine is in dry-run mode.
+        work_dir (str): The working directory for the workflow session.
+        log (ru.Logger): Logger instance for logging workflow events.
+        prof (ru.Profiler): Profiler instance for profiling workflow execution.
+        jupyter_async (bool): Indicates whether the engine is running in Jupyter async mode.
     Methods:
-        __call__(func: Callable):
-            Decorator to register workflow tasks.
-        block(func: Callable):
-            Decorator to register workflow blocks.
+        __init__(backend, dry_run, jupyter_async):
+            Initializes the WorkflowEngine with the specified backend, dry-run mode, and Jupyter async mode.
+        _setup_execution_backend():
+            Configures the execution backend based on the provided backend and dry-run mode.
+        _is_in_jupyter():
+            Checks if the engine is running in a Jupyter environment.
+        _set_loop():
+            Configures and sets the asyncio event loop for the current context.
         _start_async_tasks():
-            Starts asynchronous tasks in both synchronous and asynchronous contexts.
-        shutdown_on_failure(func: Callable):
-            Decorator that calls `shutdown` if an exception occurs in the decorated function.
-        link_explicit_data_deps(task_id: str, file_name: Optional[str] = None) -> dict:
-            Creates a dictionary linking explicit data dependencies between tasks.
-        link_implicit_data_deps(src_task: Task) -> list:
-            Generates commands to link implicit data dependencies for a source task.
-        _detect_dependencies(possible_dependencies: list) -> tuple:
-            Detects and categorizes possible dependencies into blocks/tasks, input files,
-            and output files.
+            Starts asynchronous tasks for the workflow engine.
+        _register_decorator(comp_type, task_type=None):
+            Creates a decorator for registering tasks or blocks.
+        _handle_flow_component_registration(func, comp_type, task_type, task_resource_kwargs):
+            Handles the registration of tasks or blocks as flow components.
+        _register_component(comp_fut, comp_type, comp_desc, task_type=None, task_resource_kwargs=None):
+            Registers a task or block as a flow component.
+        shutdown_on_failure(func):
+            Decorator that shuts down the execution backend if an exception occurs in the decorated function.
+        _assign_uid(prefix):
+        _detect_dependencies(possible_dependencies):
+            Detects and categorizes dependencies into tasks, input files, and output files.
         _clear():
             Clears workflow components and their dependencies.
-        async run():
-            Manages the execution of workflow components by resolving dependencies and 
-            submitting them for execution once they are resolved.
-        async submit():
-            Submits blocks or tasks from the queue for execution.
-        async _submit_blocks(blocks: list):
-            Submits blocks for execution.
-        async execute_block(block_fut, func, *args, **kwargs):
-            Executes a block function and updates its asyncio future.
+        run():
+            Async method to manage the execution of workflow components by resolving dependencies and submitting them for execution.
+        submit():
+            Async method to submit blocks or tasks from the queue for execution.
+        _submit_blocks(blocks):
+            Async method to submit blocks for execution.
+        execute_block(block_fut, func, *args, **kwargs):
+            Async method to execute a block function and update its asyncio future.
         task_callbacks(task, state):
-            Callback function to handle task state changes using asyncio.Future.
-        _assign_uid(prefix: str) -> str:
-            Generates a unique identifier (UID) for a flow component.
-        _is_in_jupyter() -> bool:
-            Detects if the code is running in a Jupyter Notebook environment.
-        _set_loop():
-            Detects and sets the asyncio event loop based on the execution context.
-        _register_component(comp_fut, comp_type: str, func_obj: dict, comp_descriptions:
-            dict, is_async: bool):
-            Shared logic for registering tasks or blocks as workflow components.
-    """
+        """
 
     @typeguard.typechecked
     def __init__(self, backend: Optional[BaseExecutionBackend] = None,
@@ -200,67 +204,92 @@ class WorkflowEngine:
             thread = threading.Thread(target=_start, daemon=True)
             thread.start()
 
-    @typeguard.typechecked
-    def __call__(self, func: Callable):
-        """Decorator to register workflow tasks."""
-        return self._handle_flow_component_registration(func, comp_type=TASK)
+    @staticmethod
+    def _register_decorator(comp_type: str, task_type: str = None):
+        def decorator(self, function: Optional[Callable] = None, **task_resource_kwargs) -> Callable:
+            def register(func: Callable) -> Callable:
+                return self._handle_flow_component_registration(func,
+                                                                comp_type=comp_type,
+                                                                task_type=task_type,
+                                                                task_resource_kwargs=task_resource_kwargs)
 
-    @typeguard.typechecked
-    def block(self, func: Callable):
-        """Decorator to register workflow blocks."""
-        return self._handle_flow_component_registration(func, comp_type=BLOCK)
+            if function is not None:
+                return register(function)
+            return register
 
-    def _handle_flow_component_registration(self, func: Callable, comp_type: str):
+        return decorator
+
+    # Define specific decorators
+    block = _register_decorator(comp_type=BLOCK)
+    function_task = _register_decorator(comp_type=TASK, task_type=FUNCTION)
+    executable_task = _register_decorator(comp_type=TASK, task_type=EXECUTABLE)
+
+    def _handle_flow_component_registration(self,
+                                            func: Callable,
+                                            comp_type: str,
+                                            task_type: str,
+                                            task_resource_kwargs: dict = None):
         """Universal decorator logic for both tasks and blocks."""
         @wraps(func)
         def wrapper(*args, **kwargs):
             is_async = asyncio.iscoroutinefunction(func)
 
-            func_obj = {'func': func, 'args': args, 'kwargs': kwargs}    
+            comp_desc = {}
+            comp_desc['args'] = args
+            comp_desc['function'] = func
+            comp_desc['kwargs'] = kwargs
+            comp_desc['async'] = is_async
+            comp_desc['task_resource_kwargs'] = task_resource_kwargs
+
             if is_async:
                 comp_fut = AsyncFuture()
                 async def async_wrapper():
-                    comp_desc = await func(*args, **kwargs) if comp_type == TASK else Block()
-                    return self._register_component(comp_fut, comp_type, func_obj,
-                                                    comp_desc, is_async=True)
+                    # get the executable from the function call using await
+                    comp_desc[EXECUTABLE] = await func(*args, **kwargs) if task_type == EXECUTABLE else None
+                    return self._register_component(comp_fut, comp_type, comp_desc, task_type)
                 asyncio.create_task(async_wrapper())
                 return comp_fut
             else:
                 comp_fut = SyncFuture()
-                comp_desc = func(*args, **kwargs) if comp_type == TASK else Block()
-                self._register_component(comp_fut, comp_type, func_obj,
-                                         comp_desc, is_async=False)
+                # get the executable from the function call
+                comp_desc[EXECUTABLE] = func(*args, **kwargs) if task_type == EXECUTABLE else None
+                self._register_component(comp_fut, comp_type, comp_desc, task_type)
                 return comp_fut
 
         return wrapper
 
-    def _register_component(self, comp_fut, comp_type: str, func_obj: dict,
-                            comp_descriptions: dict, is_async: bool):
-        """Shared task/block registration logic."""
-        comp_descriptions['name'] = func_obj['func'].__name__
+    def _register_component(self, comp_fut, comp_type: str,
+                            comp_desc: dict, task_type: str = None):
+        """
+        Shared task/block registration logic.
+        """
+        # make sure not to specify both func and executable at the same time
+        comp_desc['name'] = comp_desc['function'].__name__
+        comp_desc['uid'] = self._assign_uid(prefix=comp_type)
 
-        if comp_type == BLOCK:
-            comp_descriptions['args'] = func_obj['args']
-            comp_descriptions['kwargs'] = func_obj['kwargs']
-            comp_descriptions['function'] = func_obj['func']
+        comp_desc[FUNCTION] = None if task_type == EXECUTABLE else comp_desc[FUNCTION]
+        
+        if comp_desc[EXECUTABLE] and not isinstance(comp_desc[EXECUTABLE], str):
+            error_msg = f"Executable task must return a string, got {type(comp_desc[EXECUTABLE])}"
+            raise ValueError(error_msg)
 
-        comp_descriptions['uid'] = self._assign_uid(prefix=comp_type)
+        comp_deps, input_files_deps, output_files_deps = self._detect_dependencies(comp_desc['args'])
 
-        comp_deps, input_files_deps, output_files_deps = self._detect_dependencies(func_obj['args'])
+        comp_desc['metadata'] = {'dependencies': comp_deps,
+                                 'input_files' : input_files_deps,
+                                 'output_files': output_files_deps}
 
-        comp_descriptions['metadata'] = {'dependencies': comp_deps,
-                                         'input_files' : input_files_deps,
-                                         'output_files': output_files_deps}
+        comp_fut.id = comp_desc['uid'].split(f'{comp_type}.')[1]
 
-        comp_fut.id = comp_descriptions['uid'].split(f'{comp_type}.')[1]
-        setattr(comp_fut, comp_type, comp_descriptions)
+        setattr(comp_fut, comp_type, comp_desc)
 
-        self.components[comp_descriptions['uid']] = {'future': comp_fut,
-                                                     'description': comp_descriptions}
+        # prepare the task package that will be sent to the backend
+        self.components[comp_desc['uid']] = {'future': comp_fut,
+                                             'description': comp_desc}
 
-        self.dependencies[comp_descriptions['uid']] = comp_deps
+        self.dependencies[comp_desc['uid']] = comp_deps
 
-        self.log.debug(f"Registered {comp_type}: '{comp_descriptions['name']}' with id of {comp_descriptions['uid']}")
+        self.log.debug(f"Registered {comp_type}: '{comp_desc['name']}' with id of {comp_desc['uid']}")
 
         return comp_fut
 
@@ -293,57 +322,6 @@ class WorkflowEngine:
 
         return uid
 
-    def link_explicit_data_deps(self, task_id, file_name=None):
-        """
-        Creates a dictionary linking explicit data dependencies between tasks.
-
-        This method defines the source and target for data transfer between tasks, 
-        using the provided task ID and optional file name. If no file name is provided, 
-        the task ID is used as the file name.
-
-        Args:
-            task_id (str): The task ID to link data dependencies from.
-            file_name (str, optional): The file name to be used in the data dependency. 
-                                        Defaults to None, in which case the task_id is used.
-
-        Returns:
-            dict: A dictionary containing the data dependencies, including source, 
-                target, and transfer action.
-        """
-        if not file_name:
-            file_name = task_id
-
-        data_deps = {'source': f"pilot:///{task_id}/{file_name}",
-                     'target': f"task:///{file_name}", 'action': rp.LINK}
-
-        return data_deps
-
-    def link_implicit_data_deps(self, src_task):
-        """
-        Generates commands to link implicit data dependencies for a source task.
-
-        This method creates shell commands to copy files from the source task's sandbox
-        to the current task's sandbox, excluding task-related files. The commands are 
-        returned as a list of Python shell commands to execute in the task environment.
-
-        Args:
-            src_task (Task): The source task whose files are to be copied.
-
-        Returns:
-            list: A list of shell commands to link implicit data dependencies between tasks.
-        """
-        cmd1 = f'export SRC_TASK_ID={src_task.uid}'
-        cmd2 = f'export SRC_TASK_SANDBOX="$RP_PILOT_SANDBOX/$SRC_TASK_ID"'
-
-        cmd3 = '''files=$(cd "$SRC_TASK_SANDBOX" && ls | grep -ve "^$SRC_TASK_ID")
-                  for f in $files
-                  do 
-                     ln -sf "$SRC_TASK_SANDBOX/$f" "$RP_TASK_SANDBOX"
-                  done'''
-
-        commands = [cmd1, cmd2, cmd3]
-
-        return commands
 
     def _detect_dependencies(self, possible_dependencies):
         """
@@ -374,7 +352,8 @@ class WorkflowEngine:
 
         for possible_dep in possible_dependencies:
             # it is a flow component deps
-            if isinstance(possible_dep, SyncFuture) or isinstance(possible_dep, AsyncFuture):
+            if isinstance(possible_dep, SyncFuture) or \
+                isinstance(possible_dep, AsyncFuture):
                 if hasattr(possible_dep, TASK):
                     possible_dep = possible_dep.task
                 elif hasattr(possible_dep, BLOCK):
@@ -445,46 +424,47 @@ class WorkflowEngine:
                     continue
 
                 if comp_uid in self.running:
-                    continue
+                    if self.components[comp_uid]['future'].done():
+                        self.running.remove(comp_uid)
+                    else:
+                        continue
 
                 dependencies = self.dependencies[comp_uid]
                 if all(dep['uid'] in self.resolved and self.components[dep['uid']]['future'].done() for dep in dependencies):
                     comp_desc = self.components[comp_uid]['description']
 
-                    pre_exec = []
-                    input_staging = []
+                    files_to_stage = []
 
                     for dep in dependencies:
                         dep_desc = self.components[dep['uid']]['description']
 
-                        if not dep_desc.metadata.get('output_files'):
-                            pre_exec.extend(self.link_implicit_data_deps(dep_desc))
+                        if not dep_desc['metadata'].get('output_files'):
+                            self.backend.link_implicit_data_deps(dep_desc)
 
-                        for output_file in dep_desc.metadata['output_files']:
-                            if output_file in comp_desc.metadata['input_files']:
-                                input_staging.append(self.link_explicit_data_deps(dep['uid'], output_file))
+                        for output_file in dep_desc['metadata']['output_files']:
+                            if output_file in comp_desc['metadata']['input_files']:
+                                to_stage = self.backend.link_explicit_data_deps(dep_desc['uid'], output_file)
+                                files_to_stage.append(to_stage)
 
-                    for input_file in comp_desc.metadata['input_files']:
-                        _data_target = [item['target'].split('/')[-1] for item in input_staging]
+                    for input_file in comp_desc['metadata']['input_files']:
+                        _data_target = [item['target'].split('/')[-1] for item in files_to_stage]
                         if input_file not in _data_target:
-                            input_staging.append({'source': input_file,
-                                                 'target': f"task:///{input_file}",
-                                                 'action': rp.TRANSFER})
+                            file_name = input_file.split('/')[-1]
+                            to_stage = self.backend.link_explicit_data_deps(file_name, input_file)
+                            files_to_stage.append(to_stage)
 
-                    comp_desc.pre_exec.extend(pre_exec)
-                    comp_desc.input_staging = input_staging
                     to_submit.append(comp_desc)
 
-                    msg = f"Ready to submit: {comp_desc.name}"
+                    msg = f"Ready to submit: {comp_desc['name']}"
                     msg += f" with resolved dependencies: {[dep['name'] for dep in dependencies]}"
                     self.log.debug(msg)
 
             if to_submit:
                 await self.queue.put(to_submit)
                 for t in to_submit:
-                    self.running.append(t.uid)
-                    self.resolved.add(t.uid)
-                    self.unresolved.remove(t.uid)
+                    self.running.append(t['uid'])
+                    self.resolved.add(t['uid'])
+                    self.unresolved.remove(t['uid'])
 
             await asyncio.sleep(0.5)
 
@@ -494,10 +474,11 @@ class WorkflowEngine:
             try:
                 objects = await asyncio.wait_for(self.queue.get(), timeout=1)
 
+                # pass only the id of the resolved tasks to the backend
                 tasks = [t for t in objects if t and BLOCK not in t['uid']]
                 blocks = [b for b in objects if b and TASK not in b['uid']]
 
-                self.log.debug(f'Submitting {[b.name for b in objects]} for execution')
+                self.log.debug(f'Submitting {[b['name'] for b in objects]} for execution')
 
                 if tasks:
                     self.backend.submit_tasks(tasks)
@@ -536,23 +517,48 @@ class WorkflowEngine:
             if not block_fut.done():
                 block_fut.set_exception(e)
 
+    def handle_task_success(self, task, task_fut):
+        """
+        Handle task success by setting the result in the future.
+        """
+        internal_task = self.components[task['uid']]['description']
+
+        if internal_task[FUNCTION]:
+            task_fut.set_result(task['return_value'])
+        else:
+            task_fut.set_result(task['stdout'])
+
+    def handle_task_failure(self, task, task_fut):
+        """
+        Handle task failure by setting the exception in the future.
+        """
+        internal_task = self.components[task['uid']]['description']
+
+        if internal_task[FUNCTION]:
+            task_fut.set_exception(Exception(task['exception']))
+        else:
+            task_fut.set_exception(Exception(task['stderr']))
+
+
     def task_callbacks(self, task, state):
         """
         Callback function to handle task state changes using asyncio.Future.
         """
-        if task.uid not in self.components:
-            self.log.warning(f'Received  unknow task and will skip it: {task.uid}')
+        # we assume that the task object is a dictionary or a dict-like object
+        if not isinstance(task, dict):
+            task = task.as_dict()
+
+        if task['uid'] not in self.components:
+            self.log.warning(f'Received an unknown task and will skip it: {task["uid"]}')
             return
 
-        task_fut = self.components[task.uid]['future']
+        task_fut = self.components[task['uid']]['future']
 
-        if state == rp.DONE:
-            self.log.info(f'{task.uid} is DONE')
+        if state == DONE:
+            self.log.info(f'{task['uid']} is {state}')
             if not task_fut.done():
-                task_fut.set_result(task.stdout)
-            self.running.remove(task.uid)
-        elif state in [rp.FAILED, rp.CANCELED]:
-            self.log.info(f'{task.uid} is FAILED')
+                self.handle_task_success(task, task_fut)
+        elif state in [FAILED, CANCELED]:
+            self.log.info(f'{task['uid']} is {state}')
             if not task_fut.done():
-                task_fut.set_exception(Exception(task.stderr))
-            self.running.remove(task.uid)
+                self.handle_task_failure(task, task_fut)
