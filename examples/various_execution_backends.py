@@ -1,11 +1,11 @@
 from radical.flow import WorkflowEngine
-from radical.flow import RadicalExecutionBackend, DaskExecutionBackend
-from radical.flow import ThreadExecutionBackend, ProcessExecutionBackend
+from radical.flow import RadicalExecutionBackend
+from radical.flow import DaskExecutionBackend
+from radical.flow import ThreadExecutionBackend
 
-backends= {ThreadExecutionBackend: {},
-           ProcessExecutionBackend: {},
+backends= {ThreadExecutionBackend : {'max_workers': 4},
            RadicalExecutionBackend: {'resource': 'local.localhost'},
-           DaskExecutionBackend: {'n_workers': 2, 'threads_per_worker': 1}}
+           DaskExecutionBackend   : {'n_workers': 2, 'threads_per_worker': 1}}
 
 
 print('Running 1-layer funnel DAG workflow with each backend\n')

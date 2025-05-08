@@ -13,12 +13,13 @@ from radical.flow import RadicalExecutionBackend
 radical_backend = RadicalExecutionBackend({'resource': 'local.localhost'})
 flow = WorkflowManager(backend=radical_backend)
 
-@flow
+@flow.executable_task
 def task1(*args):
-    return Task(executable='python task1.py')
+    return 'python task1.py'
 
+@flow.function_task
 def task2(*args):
-    return Task(executable='python task1.py')
+    return 2 * 2
 
 
 # create the workflow
