@@ -58,7 +58,7 @@ class DaskExecutionBackend(BaseExecutionBackend):
     def submit_tasks(self, tasks: List[Dict[str, Any]]) -> None:
         """
         Submit tasks to Dask cluster, handling both sync and async functions.
-        
+
         Args:
             tasks: List of task dictionaries containing:
                 - uid: Unique task identifier
@@ -68,10 +68,14 @@ class DaskExecutionBackend(BaseExecutionBackend):
                 - async: Boolean indicating if function is async
         """
         for task in tasks:
+            if not task['function'] and task['executable']:
+                raise RuntimeError('DaskBackend is optimized for task functions only')
+
             self.tasks[task['uid']] = task
             
             # make sure we do not pass future object to Dask as it is not picklable
             task['args'] = tuple(arg for arg in task['args'] if not isinstance(arg, ConcurrentFuture))
+
             try:
                 if task['async']:
                     self._submit_async_function(task)
