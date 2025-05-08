@@ -2,6 +2,7 @@ import asyncio
 from typing import List, Dict, Any, Union, Optional, Callable
 import dask
 import typeguard
+from functools import wraps
 from dask.distributed import Client, Future as DaskFuture
 from concurrent.futures import Future as ConcurrentFuture
 from radical.flow.backends.execution.base import BaseExecutionBackend, Session
@@ -104,6 +105,9 @@ class DaskExecutionBackend(BaseExecutionBackend):
 
     def _submit_async_function(self, task: Dict[str, Any]) -> None:
         """Submit async function to Dask."""
+        
+        # in dask dashboard we want the real task name not "async_wrapper"
+        @wraps(task['function'])
         async def async_wrapper():
             return await task['function'](*task['args'], **task['kwargs'])
 
@@ -111,6 +115,9 @@ class DaskExecutionBackend(BaseExecutionBackend):
 
     def _submit_sync_function(self, task: Dict[str, Any]) -> None:
         """Submit sync function to Dask."""
+
+        # in dask dashboard we want the real task name not "sync_wrapper"
+        @wraps(task['function'])
         def sync_wrapper(fn, args, kwargs):
             return fn(*args, **kwargs)
 
