@@ -539,7 +539,6 @@ class WorkflowEngine:
         else:
             task_fut.set_exception(Exception(task['stderr']))
 
-
     def task_callbacks(self, task, state):
         """
         Callback function to handle task state changes using asyncio.Future.
@@ -552,13 +551,12 @@ class WorkflowEngine:
             self.log.warning(f'Received an unknown task and will skip it: {task["uid"]}')
             return
 
-        task_fut = self.components[task['uid']]['future']
-
-        if state == DONE:
-            self.log.info(f'{task['uid']} is {state}')
-            if not task_fut.done():
-                self.handle_task_success(task, task_fut)
-        elif state in [FAILED, CANCELED]:
-            self.log.info(f'{task['uid']} is {state}')
-            if not task_fut.done():
-                self.handle_task_failure(task, task_fut)
+        if state in [DONE, FAILED, CANCELED]:
+            self.log.info(f'{task["uid"]} is in {state} state')
+            task_fut = self.components[task['uid']]['future']
+            if state == DONE:
+                if not task_fut.done():
+                    self.handle_task_success(task, task_fut)
+            else:
+                if not task_fut.done():
+                    self.handle_task_failure(task, task_fut)

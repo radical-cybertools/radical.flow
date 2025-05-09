@@ -15,10 +15,10 @@ class DaskExecutionBackend(BaseExecutionBackend):
     """
 
     @typeguard.typechecked
-    def __init__(self, resources: Optional[Dict] = None):
+    def __init__(self, resources: Optional[Dict]):
         """
         Initialize the Dask execution backend.
-        
+
         Args:
             resources: Dictionary of resource requirements for tasks
         """
